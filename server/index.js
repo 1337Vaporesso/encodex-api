@@ -486,19 +486,31 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       [30, 30, duration, fps, jobId]
     );
 
-    // Target: 24MB output (matching Editing News)
-    // CRF 14 gives visually lossless quality, maxrate 8M caps balloons
-    // preset veryfast to avoid OOM (tested working on Railway)
+    // Target: 24MB output exactly (matching Editing News)
+    // Calculate video bitrate from duration to hit 24MB:
+    // total_bits = 24MB * 8 = 201,326,592 bits
+    // video_bps = (total_bits / duration) - audio_bitrate
+    const AUDIO_BITRATE = 192000; // 192 kbps
+    const TARGET_BYTES = 24 * 1024 * 1024;
+    let videoBitrate = 3000000; // default 3 Mbps
+    if (duration > 1) {
+      const totalBits = TARGET_BYTES * 8;
+      const totalBps = totalBits / duration;
+      videoBitrate = Math.round(Math.max(500000, Math.min(20000000, totalBps - AUDIO_BITRATE)));
+    }
+    const videoBitrateK = Math.round(videoBitrate / 1000);
+    console.log('[EncodeX] target', (videoBitrateK) + 'k video bitrate for', (duration || 60).toFixed(1), 's ->', TARGET_BYTES + 'B');
+
     const encodeArgs = [
       '-i', inputPath,
       '-c:v', 'libx264',
       '-preset', 'veryfast',
-      '-crf', '14',
+      '-b:v', videoBitrateK + 'k',
+      '-maxrate', Math.round(videoBitrateK * 1.5) + 'k',
+      '-bufsize', Math.round(videoBitrateK * 2) + 'k',
       '-pix_fmt', 'yuv420p',
       '-profile:v', 'high',
       '-level', '4.2',
-      '-maxrate', '8M',
-      '-bufsize', '16M',
       '-threads', '2',
       '-c:a', 'aac',
       '-b:a', '192k',
@@ -506,7 +518,6 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       '-max_muxing_queue_size', '1024',
       outputPath
     ];
-    console.log('[EncodeX] CRF 14, veryfast, maxrate 8M for', (duration || 60).toFixed(1), 's video');
     try {
       await execFFmpeg(jobId, encodeArgs, duration);
     } catch (e1) {
