@@ -396,6 +396,45 @@ app.post('/api/process/upload', (req, res) => {
     });
 });
 
+async function execFFmpeg(jobId, args, duration) {
+  console.log('[EncodeX] FFmpeg:', ffmpegPath, args.join(' '));
+  const proc = spawn(ffmpegPath, args);
+  let stderr = '';
+  let killed = false;
+  const timeout = setTimeout(() => { killed = true; proc.kill('SIGKILL'); }, 300000);
+  const interval = setInterval(async () => {
+    const cur = await pool.query('SELECT status FROM jobs WHERE id = $1', [jobId]);
+    if (!cur.rows[0] || cur.rows[0].status >= 200) { clearInterval(interval); return; }
+    const m = stderr.match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
+    if (m && duration > 0) {
+      const s = parseInt(m[1])*3600 + parseInt(m[2])*60 + parseFloat(m[3]);
+      await pool.query('UPDATE jobs SET progress = $1 WHERE id = $2', [Math.round(Math.min(88, 30 + (s/duration)*58)), jobId]);
+    }
+  }, 2000);
+  proc.stderr.on('data', d => {
+    stderr += d.toString();
+    const m = d.toString().match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
+    if (m && duration > 0) {
+      const s = parseInt(m[1])*3600 + parseInt(m[2])*60 + parseFloat(m[3]);
+      pool.query('UPDATE jobs SET progress = $1 WHERE id = $2', [Math.round(Math.min(88, 30 + (s/duration)*58)), jobId]);
+    }
+  });
+  return new Promise((resolve, reject) => {
+    proc.on('close', (code, signal) => {
+      clearTimeout(timeout); clearInterval(interval);
+      if (killed) { reject(new Error('ffmpeg timed out')); return; }
+      if (code === 0) resolve();
+      else {
+        let msg = 'ffmpeg exited with code ' + code;
+        if (signal) msg += ' signal=' + signal;
+        msg += ': ' + stderr.split('\n').slice(-3).join('\n');
+        reject(new Error(msg));
+      }
+    });
+    proc.on('error', (err) => { clearTimeout(timeout); clearInterval(interval); reject(err); });
+  });
+}
+
 async function runFFmpegPipeline(jobId, inputPath, outputPath) {
   try {
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [20, 24, jobId]);
@@ -434,50 +473,37 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       [30, 30, duration, fps, jobId]
     );
 
-    const encode = spawn(ffmpegPath, [
+    const encodeArgs = [
       '-i', inputPath,
       '-c:v', 'libx264',
-      '-preset', 'fast',
+      '-preset', 'veryfast',
       '-crf', '18',
       '-pix_fmt', 'yuv420p',
       '-r', String(Math.min(fps, 60)),
+      '-threads', '2',
       '-c:a', 'aac',
       '-b:a', '192k',
       '-movflags', '+faststart',
+      '-max_muxing_queue_size', '1024',
       outputPath
-    ]);
-    let stderr = '';
-
-    const progressInterval = setInterval(async () => {
-      const cur = await pool.query('SELECT status FROM jobs WHERE id = $1', [jobId]);
-      if (!cur.rows[0] || cur.rows[0].status >= 200) { clearInterval(progressInterval); return; }
-      const timeMatch = stderr.match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
-      if (timeMatch && duration > 0) {
-        const secs = parseInt(timeMatch[1]) * 3600 + parseInt(timeMatch[2]) * 60 + parseFloat(timeMatch[3]);
-        const pct = Math.min(88, 30 + (secs / duration) * 58);
-        await pool.query('UPDATE jobs SET progress = $1 WHERE id = $2', [Math.round(pct), jobId]);
+    ];
+    try {
+      await execFFmpeg(jobId, encodeArgs, duration);
+    } catch (e1) {
+      if (e1.message.includes('code 1') || e1.message.includes('code null')) {
+        console.log('[EncodeX] libx264 failed, retrying with h264 encoder');
+        const altArgs = encodeArgs.map(a => a === 'libx264' ? 'h264' : a);
+        try {
+          await execFFmpeg(jobId, altArgs, duration);
+        } catch (e2) {
+          console.log('[EncodeX] encode failed, falling back to stream copy');
+          const copyArgs = ['-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart', outputPath];
+          await execFFmpeg(jobId, copyArgs, duration);
+        }
+      } else {
+        throw e1;
       }
-    }, 2000);
-
-    encode.stderr.on('data', d => {
-      stderr += d.toString();
-      const m = d.toString().match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
-      if (m && duration > 0) {
-        const secs = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]);
-        const pct = Math.min(88, 30 + (secs / duration) * 58);
-        pool.query('UPDATE jobs SET progress = $1 WHERE id = $2', [Math.round(pct), jobId]);
-      }
-    });
-
-    await new Promise((resolve, reject) => {
-      encode.on('close', code => {
-        if (code === 0) resolve();
-        else reject(new Error('ffmpeg exited with code ' + code + ': ' + stderr.split('\n').slice(-3).join('\n')));
-      });
-      encode.on('error', reject);
-    });
-
-    clearInterval(progressInterval);
+    }
 
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [40, 92, jobId]);
     await new Promise(r => setTimeout(r, 500));
@@ -593,6 +619,23 @@ app._router.stack.forEach(function(r) {
     console.log('Route:', Object.keys(r.route.methods).join(',').toUpperCase(), r.route.path);
   }
 });
+
+/* ===== Check FFmpeg capabilities ===== */
+function checkFFmpeg() {
+  const check = spawn(ffmpegPath, ['-encoders']);
+  let out = '';
+  check.stdout.on('data', d => { out += d.toString(); });
+  check.on('close', code => {
+    if (code === 0) {
+      const has264 = out.includes('libx264') || out.includes('h264');
+      console.log('[FFmpeg] encoders found, libx264:', has264);
+    } else {
+      console.warn('[FFmpeg] -encoders failed with code', code);
+    }
+  });
+  check.on('error', err => console.error('[FFmpeg] -encoders error:', err.message));
+}
+checkFFmpeg();
 
 /* ===== Start ===== */
 const PORT = process.env.PORT || 3000;
