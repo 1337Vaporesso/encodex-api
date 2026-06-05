@@ -288,6 +288,8 @@ app.post('/api/process/allocate', auth, async (req, res) => {
       return res.status(429).json({ ok: false, error: 'Weekly limit reached' });
     if (usage.uploadsToday >= usage.limits.daily)
       return res.status(429).json({ ok: false, error: 'Daily limit reached' });
+    if (file_size && file_size > usage.limits.maxSizeMB * 1024 * 1024)
+      return res.status(413).json({ ok: false, error: `Max file size is ${usage.limits.maxSizeMB} MB` });
 
     const jobId = uuidv4();
     const uploadToken = uuidv4();
