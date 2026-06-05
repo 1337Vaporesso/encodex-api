@@ -486,12 +486,19 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       [30, 30, duration, fps, jobId]
     );
 
+    // Target: 24MB output (matching Editing News)
+    // CRF 14 gives visually lossless quality, maxrate 8M caps balloons
+    // preset veryfast to avoid OOM (tested working on Railway)
     const encodeArgs = [
       '-i', inputPath,
       '-c:v', 'libx264',
       '-preset', 'veryfast',
-      '-crf', '18',
+      '-crf', '14',
       '-pix_fmt', 'yuv420p',
+      '-profile:v', 'high',
+      '-level', '4.2',
+      '-maxrate', '8M',
+      '-bufsize', '16M',
       '-threads', '2',
       '-c:a', 'aac',
       '-b:a', '192k',
@@ -499,6 +506,7 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       '-max_muxing_queue_size', '1024',
       outputPath
     ];
+    console.log('[EncodeX] CRF 14, veryfast, maxrate 8M for', (duration || 60).toFixed(1), 's video');
     try {
       await execFFmpeg(jobId, encodeArgs, duration);
     } catch (e1) {
