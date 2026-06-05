@@ -344,45 +344,54 @@ app.post('/api/process/allocate', auth, async (req, res) => {
 });
 
 // ---- UPLOAD (to transcoder, authed by upload_token) ----
-app.post('/api/process/upload', authOptional, async (req, res) => {
-  const targetJobId = req.authType === 'upload_token' ? req.jobId : null;
-  if (!targetJobId) return res.status(404).json({ ok: false, error: 'Job not found' });
+app.post('/api/process/upload', (req, res) => {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ ok: false, error: 'No token' });
+  const token = header.replace('Bearer ', '');
 
-  let jobRow;
-  try {
-    const r = await pool.query('SELECT * FROM jobs WHERE id = $1', [targetJobId]);
-    if (r.rows.length === 0) return res.status(404).json({ ok: false, error: 'Job not found' });
-    jobRow = r.rows[0];
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: e.message });
-  }
+  pool.query('SELECT * FROM tokens WHERE token_value = $1 AND token_type = $2', [token, 'upload'])
+    .then(function(result) {
+      if (result.rows.length === 0) return res.status(401).json({ ok: false, error: 'Invalid token' });
+      const tokenRow = result.rows[0];
+      const targetJobId = tokenRow.job_id;
 
-  upload.single('video')(req, res, async function(err) {
-    if (err) return res.status(400).json({ ok: false, error: err.message });
-    if (!req.file) return res.status(400).json({ ok: false, error: 'No file' });
+      return pool.query('SELECT * FROM jobs WHERE id = $1', [targetJobId])
+        .then(function(jr) {
+          if (jr.rows.length === 0) return res.status(404).json({ ok: false, error: 'Job not found' });
+          const jobRow = jr.rows[0];
 
-    const usage = typeof jobRow.usage_data === 'string' ? JSON.parse(jobRow.usage_data) : (jobRow.usage_data || {});
-    const limits = (usage.limits || { maxSizeMB: 30 });
+          upload.single('video')(req, res, function(err) {
+            if (err) return res.status(400).json({ ok: false, error: err.message });
+            if (!req.file) return res.status(400).json({ ok: false, error: 'No file' });
 
-    const maxBytes = limits.maxSizeMB * 1024 * 1024;
-    if (req.file.size > maxBytes) {
-      fs.unlink(req.file.path, () => {});
-      return res.status(413).json({ ok: false, error: `Max ${limits.maxSizeMB} MB` });
-    }
+            const usage = typeof jobRow.usage_data === 'string' ? JSON.parse(jobRow.usage_data) : (jobRow.usage_data || {});
+            const limits = (usage.limits || { maxSizeMB: 30 });
+            const maxBytes = limits.maxSizeMB * 1024 * 1024;
 
-    const outputPath = path.join(TMP, `processed_${jobRow.id}.mp4`);
-    const inputPath = req.file.path;
+            if (req.file.size > maxBytes) {
+              fs.unlink(req.file.path, () => {});
+              return res.status(413).json({ ok: false, error: `Max ${limits.maxSizeMB} MB` });
+            }
 
-    await pool.query(
-      'UPDATE jobs SET input_path = $1, output_path = $2, status = $3, progress = $4 WHERE id = $5',
-      [inputPath, outputPath, 10, 18, jobRow.id]
-    );
+            const outputPath = path.join(TMP, `processed_${jobRow.id}.mp4`);
+            const inputPath = req.file.path;
 
-    // Start FFmpeg pipeline (async, updates DB as it goes)
-    runFFmpegPipeline(jobRow.id, inputPath, outputPath);
+            pool.query(
+              'UPDATE jobs SET input_path = $1, output_path = $2, status = $3, progress = $4 WHERE id = $5',
+              [inputPath, outputPath, 10, 18, jobRow.id]
+            ).then(function() {
+              runFFmpegPipeline(jobRow.id, inputPath, outputPath);
+            }).catch(function(e) {
+              console.error('DB update error:', e.message);
+            });
 
-    res.json({ ok: true, job_id: jobRow.id });
-  });
+            res.json({ ok: true, job_id: jobRow.id });
+          });
+        });
+    })
+    .catch(function(e) {
+      res.status(500).json({ ok: false, error: e.message });
+    });
 });
 
 async function runFFmpegPipeline(jobId, inputPath, outputPath) {
