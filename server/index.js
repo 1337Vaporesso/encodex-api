@@ -455,18 +455,31 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     });
 
     let fps = 30;
+    let width = 0;
+    let height = 0;
+    let codec = '';
     let duration = 0;
     try {
       const info = JSON.parse(analyzeOut);
-      const videoStream = info.streams.find(s => s.codec_type === 'video');
-      if (videoStream && videoStream.r_frame_rate) {
-        const parts = videoStream.r_frame_rate.split('/');
-        fps = Math.round(parseInt(parts[0]) / parseInt(parts[1]));
+      const vs = info.streams.find(s => s.codec_type === 'video');
+      if (vs) {
+        width = vs.width || 0;
+        height = vs.height || 0;
+        codec = vs.codec_name || '';
+        // avg_frame_rate is more reliable than r_frame_rate for VFR
+        let rateStr = vs.avg_frame_rate || vs.r_frame_rate || '30/1';
+        const parts = rateStr.split('/');
+        const num = parseFloat(parts[0]);
+        const den = parseFloat(parts[1]) || 1;
+        if (num > 0 && den > 0) fps = Math.round(num / den);
+        if (fps < 1 || fps > 240) fps = 30;
       }
       if (info.format && info.format.duration) {
         duration = parseFloat(info.format.duration);
       }
     } catch (e) {}
+
+    console.log('[EncodeX] source:', width + 'x' + height, codec, fps + 'fps', duration + 's');
 
     await pool.query(
       'UPDATE jobs SET status = $1, progress = $2, duration = $3, analyzed_fps = $4 WHERE id = $5',
@@ -479,7 +492,6 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       '-preset', 'veryfast',
       '-crf', '18',
       '-pix_fmt', 'yuv420p',
-      '-r', String(Math.min(fps, 60)),
       '-threads', '2',
       '-c:a', 'aac',
       '-b:a', '192k',
