@@ -217,36 +217,23 @@ app.post('/api/admin/grant-admin', auth, isAdmin, async function(req, res) {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ===== HQ Upload Process Endpoints ===== */
+/* ===== HQ Upload Process Endpoints (mirrors Editing News) ===== */
 
-// Usage check helper
 async function checkAndResetUsage(userId) {
   const result = await pool.query('SELECT premium, uploads_today, uploads_this_week, last_daily_reset, last_weekly_reset FROM users WHERE id = $1', [userId]);
   const user = result.rows[0];
   if (!user) return null;
-
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
   const currentWeek = getISOWeek(today);
   const lastWeek = user.last_weekly_reset ? getISOWeek(new Date(user.last_weekly_reset)) : 0;
-
   let uploadsToday = user.uploads_today;
   let uploadsThisWeek = user.uploads_this_week;
-
-  // Reset daily if new day
-  if (user.last_daily_reset && user.last_daily_reset.toISOString().split('T')[0] !== todayStr) {
-    uploadsToday = 0;
-  }
-
-  // Reset weekly if new week
-  if (currentWeek !== lastWeek) {
-    uploadsThisWeek = 0;
-  }
-
+  if (user.last_daily_reset && user.last_daily_reset.toISOString().split('T')[0] !== todayStr) uploadsToday = 0;
+  if (currentWeek !== lastWeek) uploadsThisWeek = 0;
   const limits = user.premium
     ? { daily: 10, weekly: 50, maxSizeMB: 90 }
     : { daily: 999, weekly: 3, maxSizeMB: 30 };
-
   return { uploadsToday, uploadsThisWeek, limits, premium: user.premium };
 }
 
@@ -257,143 +244,204 @@ async function commitUsage(userId, usage) {
   const weekStart = new Date(today);
   weekStart.setDate(weekStart.getDate() - ((today.getDay() + 6) % 7));
   const weekStartStr = weekStart.toISOString().split('T')[0];
-
   await pool.query(
     'UPDATE users SET uploads_today = $1, uploads_this_week = $2, last_daily_reset = $3, last_weekly_reset = $4 WHERE id = $5',
     [usage.uploadsToday, usage.uploadsThisWeek, todayStr, weekStartStr, userId]
   );
 }
 
-app.post('/api/process/upload', auth, async (req, res) => {
+// In-memory store for upload_tokens (token -> { jobId, userId })
+const uploadTokens = new Map();
+// In-memory store for usage_tokens (token -> { userId, used })
+const usageTokens = new Map();
+
+// Middleware that accepts either JWT or upload_token
+function authOptional(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ ok: false, error: 'No token' });
+  const token = header.replace('Bearer ', '');
+  // Try as JWT first
   try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.id;
+    req.authType = 'jwt';
+    return next();
+  } catch (e) {}
+  // Try as upload_token
+  const up = uploadTokens.get(token);
+  if (up) {
+    req.jobId = up.jobId;
+    req.userId = up.userId;
+    req.authType = 'upload_token';
+    return next();
+  }
+  res.status(401).json({ ok: false, error: 'Invalid token' });
+}
+
+// ---- ALLOCATE ----
+app.post('/api/process/allocate', auth, async (req, res) => {
+  try {
+    const { file_size } = req.body;
     const usage = await checkAndResetUsage(req.userId);
     if (!usage) return res.status(404).json({ ok: false, error: 'User not found' });
-
-    // Check limits
-    if (usage.uploadsThisWeek >= usage.limits.weekly) {
+    if (usage.uploadsThisWeek >= usage.limits.weekly)
       return res.status(429).json({ ok: false, error: 'Weekly limit reached' });
-    }
-    if (usage.uploadsToday >= usage.limits.daily) {
+    if (usage.uploadsToday >= usage.limits.daily)
       return res.status(429).json({ ok: false, error: 'Daily limit reached' });
-    }
 
-    // Handle multipart upload
-    upload.single('video')(req, res, async function(err) {
-      if (err) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return res.status(413).json({ ok: false, error: 'File too large (max 100 MB)' });
-        }
-        return res.status(400).json({ ok: false, error: err.message });
-      }
+    const jobId = uuidv4();
+    const uploadToken = uuidv4();
+    const usageToken = uuidv4();
+    const BASE = process.env.BASE_URL || 'https://encodex-api-production.up.railway.app';
 
-      if (!req.file) {
-        return res.status(400).json({ ok: false, error: 'No file uploaded' });
-      }
+    uploadTokens.set(uploadToken, { jobId, userId: req.userId });
+    usageTokens.set(usageToken, { userId: req.userId, used: false });
 
-      // Check file size against user limit
-      const maxBytes = usage.limits.maxSizeMB * 1024 * 1024;
-      if (req.file.size > maxBytes) {
-        fs.unlink(req.file.path, () => {});
-        return res.status(413).json({ ok: false, error: `File too large (max ${usage.limits.maxSizeMB} MB for your plan)` });
-      }
+    const job = {
+      id: jobId,
+      userId: req.userId,
+      uploadToken,
+      usageToken,
+      inputPath: null,
+      outputPath: null,
+      status: 0,       // 10=queued, 20=analyzing, 30=encoding, 40=patching, 200=done
+      progress: 0,
+      fileSize: file_size || 0,
+      usage,
+      createdAt: Date.now()
+    };
+    jobs.set(jobId, job);
 
-      const jobId = uuidv4();
-      const outputPath = path.join(TMP, `processed_${jobId}.mp4`);
-
-      const job = {
-        id: jobId,
-        userId: req.userId,
-        inputPath: req.file.path,
-        outputPath: outputPath,
-        status: 'processing',
-        fileSize: req.file.size,
-        usage: usage,
-        createdAt: Date.now()
-      };
-      jobs.set(jobId, job);
-
-      // Spawn FFmpeg - copy streams (remux, no re-encode)
-      const ff = spawn('ffmpeg', [
-        '-i', req.file.path,
-        '-c', 'copy',
-        '-map', '0',
-        '-movflags', '+faststart',
-        outputPath
-      ]);
-      let stderr = '';
-      ff.stderr.on('data', d => { stderr += d.toString(); });
-      ff.on('close', code => {
-        if (code === 0) {
-          job.status = 'done';
-        } else {
-          job.status = 'error';
-          job.error = stderr.split('\n').slice(-3).join('\n');
-        }
-      });
-
-      res.json({ ok: true, jobId: jobId });
+    res.json({
+      ok: true,
+      transcoder_url: BASE,
+      upload_token: uploadToken,
+      usage_token: usageToken,
+      job_id: jobId
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-app.get('/api/process/status/:jobId', auth, (req, res) => {
-  const job = jobs.get(req.params.jobId);
+// ---- UPLOAD (to transcoder, authed by upload_token) ----
+app.post('/api/process/upload', authOptional, (req, res) => {
+  const targetJobId = req.authType === 'upload_token' ? req.jobId : null;
+  const job = targetJobId ? jobs.get(targetJobId) : null;
   if (!job) return res.status(404).json({ ok: false, error: 'Job not found' });
-  if (job.userId !== req.userId) return res.status(403).json({ ok: false, error: 'Forbidden' });
-  res.json({ ok: true, status: job.status });
+
+  upload.single('video')(req, res, function(err) {
+    if (err) return res.status(400).json({ ok: false, error: err.message });
+    if (!req.file) return res.status(400).json({ ok: false, error: 'No file' });
+
+    // Check file size against user plan limit
+    const maxBytes = job.usage.limits.maxSizeMB * 1024 * 1024;
+    if (req.file.size > maxBytes) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(413).json({ ok: false, error: `Max ${job.usage.limits.maxSizeMB} MB` });
+    }
+
+    const outputPath = path.join(TMP, `processed_${job.id}.mp4`);
+    job.inputPath = req.file.path;
+    job.outputPath = outputPath;
+    job.status = 10;
+    job.progress = 18;
+
+    // Start FFmpeg (simulate analyze→encode→patch via status updates)
+    const ff = spawn('ffmpeg', [
+      '-i', req.file.path,
+      '-c', 'copy',
+      '-map', '0',
+      '-movflags', '+faststart',
+      outputPath
+    ]);
+    let stderr = '';
+
+    // Simulate progress through phases
+    job.status = 20; job.progress = 24;
+    let progressInterval = setInterval(() => {
+      if (job.status >= 200 || job.status >= 400) { clearInterval(progressInterval); return; }
+      job.status = 30;
+      job.progress = Math.min(88, 30 + (job.progress || 30) * 0.05);
+    }, 2000);
+
+    ff.stderr.on('data', d => { stderr += d.toString(); });
+    ff.on('close', code => {
+      clearInterval(progressInterval);
+      if (code === 0) {
+        job.status = 40; job.progress = 92;
+        setTimeout(() => { job.status = 200; job.progress = 100; }, 500);
+      } else {
+        job.status = 500;
+        job.error = stderr.split('\n').slice(-3).join('\n');
+      }
+    });
+
+    res.json({ ok: true, job_id: job.id });
+  });
 });
 
-app.get('/api/process/result/:jobId', auth, (req, res) => {
-  const job = jobs.get(req.params.jobId);
+// ---- STATUS ----
+app.get('/api/process/status', authOptional, (req, res) => {
+  const jobId = req.query.job_id || req.jobId;
+  const job = jobs.get(jobId);
   if (!job) return res.status(404).json({ ok: false, error: 'Job not found' });
-  if (job.userId !== req.userId) return res.status(403).json({ ok: false, error: 'Forbidden' });
-  if (job.status !== 'done') return res.status(400).json({ ok: false, error: 'Job not ready' });
+
+  let resp = { ok: true, status: job.status };
+  if (job.status === 30) resp.progress = job.progress;
+  res.json(resp);
+});
+
+// ---- RESULT ----
+app.get('/api/process/result', authOptional, (req, res) => {
+  const jobId = req.query.job_id || req.jobId;
+  const job = jobs.get(jobId);
+  if (!job) return res.status(404).json({ ok: false, error: 'Job not found' });
+  if (job.status !== 200) return res.status(400).json({ ok: false, error: 'Job not ready' });
 
   res.download(job.outputPath, 'video.mp4', function(err) {
-    if (err) {
-      console.error('Download error:', err.message);
-    }
-    // Cleanup temp files after download
+    if (err) console.error('Download error:', err.message);
     fs.unlink(job.inputPath, () => {});
     fs.unlink(job.outputPath, () => {});
-    // Keep job in memory for status reference but mark as delivered
-    job.delivered = true;
-    // Auto-delete job after 5 min
+    // Clean upload_token
+    for (const [tok, val] of uploadTokens) {
+      if (val.jobId === job.id) { uploadTokens.delete(tok); break; }
+    }
     setTimeout(() => jobs.delete(job.id), 300000);
   });
 });
 
+// ---- COMMIT (by usage_token, charged AFTER TikTok upload succeeds) ----
 app.post('/api/process/commit', auth, async (req, res) => {
   try {
-    const { jobId } = req.body;
-    if (!jobId) return res.status(400).json({ ok: false, error: 'jobId required' });
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ ok: false, error: 'token required' });
 
-    const job = jobs.get(jobId);
-    if (!job) return res.status(404).json({ ok: false, error: 'Job not found' });
-    if (job.userId !== req.userId) return res.status(403).json({ ok: false, error: 'Forbidden' });
+    const ut = usageTokens.get(token);
+    if (!ut) return res.status(404).json({ ok: false, error: 'USAGE_TOKEN_NOT_FOUND' });
+    if (ut.used) return res.status(400).json({ ok: false, error: 'Token already used' });
+    if (ut.userId !== req.userId) return res.status(403).json({ ok: false, error: 'Forbidden' });
 
-    // Increment usage
-    job.usage.uploadsToday++;
-    job.usage.uploadsThisWeek++;
-    await commitUsage(req.userId, job.usage);
+    ut.used = true;
 
-    const limits = job.usage.limits;
-    res.json({
-      ok: true,
-      daily_used: job.usage.uploadsToday,
-      daily_limit: limits.daily,
-      weekly_used: job.usage.uploadsThisWeek,
-      weekly_limit: limits.weekly,
-      premium: job.usage.premium
-    });
+    // Find job by usage token to get usage info
+    let job = null;
+    for (const [, j] of jobs) {
+      if (j.usageToken === token) { job = j; break; }
+    }
+    if (job) {
+      job.usage.uploadsToday++;
+      job.usage.uploadsThisWeek++;
+      await commitUsage(req.userId, job.usage);
+    }
+
+    res.json({ ok: true, success: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-// Usage stats endpoint
+// ---- USAGE STATS ----
 app.get('/api/process/usage', auth, async (req, res) => {
   try {
     const usage = await checkAndResetUsage(req.userId);
