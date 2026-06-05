@@ -435,9 +435,10 @@ app.post('/api/process/upload', authOptional, (req, res) => {
   });
 });
 
-// ---- STATUS ----
-app.get('/api/process/status', authOptional, (req, res) => {
-  const jobId = req.query.job_id || req.jobId;
+// ---- STATUS (public, auth by job_id UUID) ----
+app.get('/api/process/status', (req, res) => {
+  const jobId = req.query.job_id;
+  if (!jobId) return res.status(400).json({ ok: false, error: 'No job_id' });
   const job = jobs.get(jobId);
   if (!job) return res.status(404).json({ ok: false, error: 'Job not found' });
 
@@ -446,9 +447,10 @@ app.get('/api/process/status', authOptional, (req, res) => {
   res.json(resp);
 });
 
-// ---- RESULT ----
-app.get('/api/process/result', authOptional, (req, res) => {
-  const jobId = req.query.job_id || req.jobId;
+// ---- RESULT (public, auth by job_id UUID) ----
+app.get('/api/process/result', (req, res) => {
+  const jobId = req.query.job_id;
+  if (!jobId) return res.status(400).json({ ok: false, error: 'No job_id' });
   const job = jobs.get(jobId);
   if (!job) return res.status(404).json({ ok: false, error: 'Job not found' });
   if (job.status !== 200) return res.status(400).json({ ok: false, error: 'Job not ready' });
