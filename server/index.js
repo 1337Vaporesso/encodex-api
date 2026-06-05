@@ -8,6 +8,8 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const ffmpegPath = require('ffmpeg-static');
+const ffprobePath = require('ffprobe-static').path;
 require('dotenv').config();
 
 const app = express();
@@ -396,17 +398,9 @@ app.post('/api/process/upload', (req, res) => {
 
 async function runFFmpegPipeline(jobId, inputPath, outputPath) {
   try {
-    // Check that ffprobe and ffmpeg are available
-    try {
-      require('child_process').execSync('which ffprobe ffmpeg', { stdio: 'pipe' });
-    } catch (e) {
-      const missing = require('child_process').execSync('which ffprobe 2>/dev/null; which ffmpeg 2>/dev/null; echo DONE', { encoding: 'utf8' });
-      throw new Error('FFmpeg tools not found: ' + missing);
-    }
-
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [20, 24, jobId]);
 
-    const analyze = spawn('ffprobe', [
+    const analyze = spawn(ffprobePath, [
       '-v', 'quiet',
       '-print_format', 'json',
       '-show_format',
@@ -440,7 +434,7 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       [30, 30, duration, fps, jobId]
     );
 
-    const encode = spawn('ffmpeg', [
+    const encode = spawn(ffmpegPath, [
       '-i', inputPath,
       '-c:v', 'libx264',
       '-preset', 'fast',
