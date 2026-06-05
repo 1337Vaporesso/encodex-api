@@ -435,6 +435,66 @@ async function execFFmpeg(jobId, args, duration) {
   });
 }
 
+async function execFFmpeg2Pass(jobId, passArgs, inputPath, outputPath, duration) {
+  // Pass 1: analyze only (no output file)
+  const pass1Args = [...passArgs, '-pass', '1', '-an', '-f', 'null', '-'];
+  console.log('[EncodeX] 2-pass pass1:', pass1Args.join(' '));
+  const p1 = spawn(ffmpegPath, pass1Args);
+  await new Promise((resolve, reject) => {
+    p1.on('close', (code, signal) => {
+      if (code === 0) resolve();
+      else {
+        let msg = 'ffmpeg pass1 exited with code ' + code;
+        if (signal) msg += ' signal=' + signal;
+        reject(new Error(msg));
+      }
+    });
+    p1.on('error', reject);
+  });
+
+  // Pass 2: actual encode with audio
+  const pass2Args = [...passArgs, '-pass', '2', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-max_muxing_queue_size', '1024', outputPath];
+  console.log('[EncodeX] 2-pass pass2:', pass2Args.join(' '));
+  const p2 = spawn(ffmpegPath, pass2Args);
+  let stderr = '';
+  let killed = false;
+  const timeout = setTimeout(() => { killed = true; p2.kill('SIGKILL'); }, 300000);
+  const interval = setInterval(async () => {
+    const cur = await pool.query('SELECT status FROM jobs WHERE id = $1', [jobId]);
+    if (!cur.rows[0] || cur.rows[0].status >= 200) { clearInterval(interval); return; }
+    const m = stderr.match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
+    if (m && duration > 0) {
+      const s = parseInt(m[1])*3600 + parseInt(m[2])*60 + parseFloat(m[3]);
+      await pool.query('UPDATE jobs SET progress = $1 WHERE id = $2', [Math.round(Math.min(88, 30 + (s/duration)*58)), jobId]);
+    }
+  }, 2000);
+  p2.stderr.on('data', d => {
+    stderr += d.toString();
+    const m = d.toString().match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
+    if (m && duration > 0) {
+      const s = parseInt(m[1])*3600 + parseInt(m[2])*60 + parseFloat(m[3]);
+      pool.query('UPDATE jobs SET progress = $1 WHERE id = $2', [Math.round(Math.min(88, 30 + (s/duration)*58)), jobId]);
+    }
+  });
+  await new Promise((resolve, reject) => {
+    p2.on('close', (code, signal) => {
+      clearTimeout(timeout); clearInterval(interval);
+      if (killed) { reject(new Error('ffmpeg 2-pass timed out')); return; }
+      if (code === 0) resolve();
+      else {
+        let msg = 'ffmpeg pass2 exited with code ' + code;
+        if (signal) msg += ' signal=' + signal;
+        msg += ': ' + stderr.split('\n').slice(-3).join('\n');
+        reject(new Error(msg));
+      }
+    });
+    p2.on('error', (err) => { clearTimeout(timeout); clearInterval(interval); reject(err); });
+  });
+  // Cleanup pass log
+  try { fs.unlinkSync('ffmpeg2pass-0.log'); } catch(e) {}
+  try { fs.unlinkSync('ffmpeg2pass-0.log.mbtree'); } catch(e) {}
+}
+
 async function runFFmpegPipeline(jobId, inputPath, outputPath) {
   try {
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [20, 24, jobId]);
@@ -501,7 +561,7 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     const videoBitrateK = Math.round(videoBitrate / 1000);
     console.log('[EncodeX] target', (videoBitrateK) + 'k video bitrate for', (duration || 60).toFixed(1), 's ->', TARGET_BYTES + 'B');
 
-    const encodeArgs = [
+    const passArgs = [
       '-i', inputPath,
       '-c:v', 'libx264',
       '-preset', 'veryfast',
@@ -512,27 +572,25 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       '-profile:v', 'high',
       '-level', '4.2',
       '-threads', '2',
-      '-c:a', 'aac',
-      '-b:a', '192k',
-      '-movflags', '+faststart',
-      '-max_muxing_queue_size', '1024',
-      outputPath
     ];
     try {
-      await execFFmpeg(jobId, encodeArgs, duration);
+      // 2-pass to hit 24MB exactly (like Editing News)
+      await execFFmpeg2Pass(jobId, passArgs, inputPath, outputPath, duration);
     } catch (e1) {
-      if (e1.message.includes('code 1') || e1.message.includes('code null')) {
-        console.log('[EncodeX] libx264 failed, retrying with h264 encoder');
-        const altArgs = encodeArgs.map(a => a === 'libx264' ? 'h264' : a);
+      console.log('[EncodeX] 2-pass failed, retrying 1-pass:', e1.message.slice(0, 80));
+      const onePassArgs = [...passArgs, '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-max_muxing_queue_size', '1024', outputPath];
+      try {
+        await execFFmpeg(jobId, onePassArgs, duration);
+      } catch (e2) {
+        console.log('[EncodeX] libx264 failed, retrying h264');
+        const altArgs = onePassArgs.map(a => a === 'libx264' ? 'h264' : a);
         try {
           await execFFmpeg(jobId, altArgs, duration);
-        } catch (e2) {
+        } catch (e3) {
           console.log('[EncodeX] encode failed, falling back to stream copy');
           const copyArgs = ['-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart', outputPath];
           await execFFmpeg(jobId, copyArgs, duration);
         }
-      } else {
-        throw e1;
       }
     }
 
