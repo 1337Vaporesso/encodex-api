@@ -1,23 +1,19 @@
 (function() {
-  const SERVER = 'https://encodex-api-production.up.railway.app';
   let hqEnabled = false;
   let processing = false;
   let reentryGuard = false;
   let pendingUsageToken = null;
   let commitInFlight = false;
-  let token = null;
+  let tokenReceived = false;
+
+  // Store DOM refs here (not passed through postMessage)
+  let pendingInput = null;
+  let pendingDropTarget = null;
+  let pendingFileName = '';
+  let pendingFileType = '';
 
   window._encodex_hqEnabled = false;
   window._encodex_currentLang = 'ru';
-
-  function getToken() {
-    if (token) return token;
-    try {
-      var raw = localStorage.getItem('encodex_token');
-      if (raw) token = raw;
-    } catch (e) {}
-    return token;
-  }
 
   function showOverlay(file) {
     var existing = document.getElementById('encodex-hq-overlay');
@@ -51,103 +47,11 @@
     if (el) el.remove();
   }
 
-  // === STEP 1: ALLOCATE ===
-  function allocate(fileSize) {
-    return new Promise(function(resolve, reject) {
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', SERVER + '/api/process/allocate');
-      xhr.setRequestHeader('Content-Type', 'application/json');
-      xhr.setRequestHeader('Authorization', 'Bearer ' + getToken());
-      xhr.onload = function() {
-        try {
-          var data = JSON.parse(xhr.responseText);
-          if (data.ok) resolve(data);
-          else reject(new Error(data.error || 'Allocate failed'));
-        } catch (e) { reject(new Error('Invalid response')); }
-      };
-      xhr.onerror = function() { reject(new Error('Network error')); };
-      xhr.send(JSON.stringify({ file_size: fileSize }));
-    });
+  function postMsg(type, payload) {
+    window.postMessage({ source: 'encodex-inject', type: type, payload: payload }, '*');
   }
 
-  // === STEP 2: UPLOAD ===
-  function uploadFile(transcoderUrl, uploadToken, file) {
-    return new Promise(function(resolve, reject) {
-      var fd = new FormData();
-      fd.append('video', file);
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', transcoderUrl + '/api/process/upload');
-      xhr.setRequestHeader('Authorization', 'Bearer ' + uploadToken);
-      xhr.upload.onprogress = function(e) {
-        if (e.lengthComputable) {
-          var pct = Math.round((e.loaded / e.total) * 100 * 0.16 + 2); // 2% → 18%
-          var label = (window._encodex_currentLang === 'ru' ? 'Загрузка' : 'Uploading') + ' (' + Math.round(pct) + '%)';
-          updateOverlay(label, pct);
-        }
-      };
-      xhr.onload = function() {
-        try {
-          var data = JSON.parse(xhr.responseText);
-          if (data.ok) resolve(data.job_id);
-          else reject(new Error(data.error || 'Upload failed'));
-        } catch (e) { reject(new Error('Invalid response')); }
-      };
-      xhr.onerror = function() { reject(new Error('Network error')); };
-      xhr.send(fd);
-    });
-  }
-
-  // === STEP 3: POLL STATUS ===
-  function pollStatus(transcoderUrl, uploadToken, jobId) {
-    return new Promise(function(resolve, reject) {
-      var retries = 0;
-      (function poll() {
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', transcoderUrl + '/api/process/status?job_id=' + jobId);
-        xhr.setRequestHeader('Authorization', 'Bearer ' + uploadToken);
-        xhr.onload = function() {
-          try {
-            var data = JSON.parse(xhr.responseText);
-            if (!data.ok) { retries++; if (retries < 360) setTimeout(poll, 1000); else reject(new Error('Timeout')); return; }
-            // Status codes: 10=queued, 20=analyzing, 30=encoding, 40=patching, 200=complete
-            if (data.status === 200) { resolve(); return; }
-            if (data.status >= 400) { reject(new Error('Processing failed')); return; }
-            var phaseLabel = '';
-            var progress = 18;
-            if (data.status === 10) { phaseLabel = window._encodex_currentLang === 'ru' ? 'В очереди' : 'Queued'; progress = 18; }
-            else if (data.status === 20) { phaseLabel = window._encodex_currentLang === 'ru' ? 'Анализ' : 'Analyzing'; progress = 24; }
-            else if (data.status === 30) { phaseLabel = window._encodex_currentLang === 'ru' ? 'Кодирование' : 'Encoding'; progress = Math.round(data.progress || 50); }
-            else if (data.status === 40) { phaseLabel = window._encodex_currentLang === 'ru' ? 'Финализация' : 'Patching'; progress = 92; }
-            updateOverlay(phaseLabel + ' (' + progress + '%)', progress);
-            retries = 0;
-            setTimeout(poll, 1000);
-          } catch (e) { retries++; if (retries < 360) setTimeout(poll, 1000); else reject(new Error('Timeout')); }
-        };
-        xhr.onerror = function() { retries++; if (retries < 360) setTimeout(poll, 1000); else reject(new Error('Timeout')); };
-        xhr.send();
-      })();
-    });
-  }
-
-  // === STEP 4: DOWNLOAD RESULT ===
-  function downloadResult(transcoderUrl, uploadToken, jobId) {
-    return new Promise(function(resolve, reject) {
-      var label = window._encodex_currentLang === 'ru' ? 'Скачивание...' : 'Downloading...';
-      updateOverlay(label, 96);
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', transcoderUrl + '/api/process/result?job_id=' + jobId);
-      xhr.setRequestHeader('Authorization', 'Bearer ' + uploadToken);
-      xhr.responseType = 'arraybuffer';
-      xhr.onload = function() {
-        if (xhr.status === 200) resolve(xhr.response);
-        else reject(new Error('Download failed'));
-      };
-      xhr.onerror = function() { reject(new Error('Network error')); };
-      xhr.send();
-    });
-  }
-
-  // === INTERCEPT FILE CHANGE (capture phase) ===
+  // === INTERCEPT FILE CHANGE ===
   window.addEventListener('change', function(e) {
     var input = e.target;
     if (input.tagName !== 'INPUT' || input.type !== 'file') return;
@@ -155,51 +59,21 @@
     if (!hqEnabled) return;
     if (!input.files || !input.files[0]) return;
     if (processing) { e.stopImmediatePropagation(); return; }
-
     var file = input.files[0];
-    if (!getToken()) {
+    if (!tokenReceived) {
       if (window._encodex_currentLang === 'ru') alert('EncodeX: войди в аккаунт в расширении');
       else alert('EncodeX: login in the extension first');
       e.stopImmediatePropagation();
       return;
     }
-
     e.stopImmediatePropagation();
     processing = true;
+    pendingInput = input;
+    pendingDropTarget = null;
+    pendingFileName = file.name;
+    pendingFileType = file.type;
     showOverlay(file);
-
-    allocate(file.size)
-      .then(function(a) {
-        return uploadFile(a.transcoder_url, a.upload_token, file)
-          .then(function(jobId) { return { a: a, jobId: jobId }; });
-      })
-      .then(function(ctx) {
-        return pollStatus(ctx.a.transcoder_url, ctx.a.upload_token, ctx.jobId)
-          .then(function() { return ctx; });
-      })
-      .then(function(ctx) {
-        return downloadResult(ctx.a.transcoder_url, ctx.a.upload_token, ctx.jobId)
-          .then(function(buffer) { return { ctx: ctx, buffer: buffer }; });
-      })
-      .then(function(result) {
-        var newFile = new File([result.buffer], file.name, { type: file.type, lastModified: Date.now() });
-        var dt = new DataTransfer();
-        dt.items.add(newFile);
-        input.files = dt.files;
-        pendingUsageToken = result.ctx.a.usage_token;
-        processing = false;
-        removeOverlay();
-        updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
-        reentryGuard = true;
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-      })
-      .catch(function(err) {
-        console.error('[EncodeX] HQ Upload error:', err);
-        processing = false;
-        removeOverlay();
-        var msg = window._encodex_currentLang === 'ru' ? 'Ошибка: ' : 'Error: ';
-        alert(msg + err.message);
-      });
+    postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type });
   }, true);
 
   // === INTERCEPT DRAG-AND-DROP ===
@@ -211,55 +85,120 @@
     var file = dt.files[0];
     if (!file.type.startsWith('video/')) return;
     if (processing) { e.stopImmediatePropagation(); e.preventDefault(); return; }
-
-    if (!getToken()) {
+    if (!tokenReceived) {
       if (window._encodex_currentLang === 'ru') alert('EncodeX: войди в аккаунт в расширении');
       else alert('EncodeX: login in the extension first');
       e.stopImmediatePropagation();
       return;
     }
-
     e.stopImmediatePropagation();
     e.preventDefault();
     processing = true;
+    pendingInput = null;
+    pendingDropTarget = e.target;
+    pendingFileName = file.name;
+    pendingFileType = file.type;
     showOverlay(file);
-
-    allocate(file.size)
-      .then(function(a) {
-        return uploadFile(a.transcoder_url, a.upload_token, file)
-          .then(function(jobId) { return { a: a, jobId: jobId }; });
-      })
-      .then(function(ctx) {
-        return pollStatus(ctx.a.transcoder_url, ctx.a.upload_token, ctx.jobId)
-          .then(function() { return ctx; });
-      })
-      .then(function(ctx) {
-        return downloadResult(ctx.a.transcoder_url, ctx.a.upload_token, ctx.jobId)
-          .then(function(buffer) { return { ctx: ctx, buffer: buffer }; });
-      })
-      .then(function(result) {
-        var newFile = new File([result.buffer], file.name, { type: file.type, lastModified: Date.now() });
-        var w = new DataTransfer();
-        w.items.add(newFile);
-        pendingUsageToken = result.ctx.a.usage_token;
-        processing = false;
-        removeOverlay();
-        reentryGuard = true;
-        // Re-dispatch drop event with processed file on the same target
-        var target = e.target;
-        if (target) {
-          target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: w }));
-        }
-      })
-      .catch(function(err) {
-        console.error('[EncodeX] HQ Upload error:', err);
-        processing = false;
-        removeOverlay();
-        alert((window._encodex_currentLang === 'ru' ? 'Ошибка: ' : 'Error: ') + err.message);
-      });
+    postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type, isDrop: true });
   }, true);
 
-  // === INTERCEPT FETCH/XHR TO COMMIT USAGE AFTER TIKTOK UPLOAD ===
+  // === LISTEN FOR RESPONSES FROM content.js ===
+  window.addEventListener('message', function(e) {
+    if (!e.data || e.data.source !== 'encodex-content') return;
+    var p = e.data.payload || {};
+
+    switch (e.data.type) {
+      case 'ALLOCATE_RESULT':
+        if (p.ok && p._file) {
+          postMsg('UPLOAD', {
+            transcoderUrl: p.transcoder_url,
+            uploadToken: p.upload_token,
+            usageToken: p.usage_token,
+            _file: p._file
+          });
+        } else {
+          processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
+          alert('EncodeX: ' + (p.error || 'Allocate failed'));
+        }
+        break;
+
+      case 'UPLOAD_PROGRESS':
+        updateOverlay(p.label, p.percent);
+        break;
+
+      case 'UPLOAD_RESULT':
+        if (p.ok) {
+          postMsg('POLL', {
+            transcoderUrl: p.transcoderUrl,
+            uploadToken: p.uploadToken,
+            usageToken: p.usageToken,
+            jobId: p.jobId
+          });
+        } else {
+          processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
+          alert('EncodeX: ' + (p.error || 'Upload failed'));
+        }
+        break;
+
+      case 'POLL_PROGRESS':
+        updateOverlay(p.label, p.percent);
+        break;
+
+      case 'POLL_RESULT':
+        if (p.ok) {
+          postMsg('DOWNLOAD', {
+            transcoderUrl: p.transcoderUrl,
+            uploadToken: p.uploadToken,
+            usageToken: p.usageToken,
+            jobId: p.jobId
+          });
+        } else {
+          processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
+          alert('EncodeX: ' + (p.error || 'Processing failed'));
+        }
+        break;
+
+      case 'DOWNLOAD_RESULT':
+        if (p.ok && p.buffer) {
+          var newFile = new File([p.buffer], pendingFileName, { type: pendingFileType, lastModified: Date.now() });
+          if (pendingInput) {
+            var dt = new DataTransfer();
+            dt.items.add(newFile);
+            pendingInput.files = dt.files;
+            pendingUsageToken = p._usageToken;
+            processing = false;
+            removeOverlay();
+            updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
+            reentryGuard = true;
+            var inp = pendingInput;
+            pendingInput = null; pendingDropTarget = null;
+            inp.dispatchEvent(new Event('change', { bubbles: true }));
+          } else if (pendingDropTarget) {
+            var w = new DataTransfer();
+            w.items.add(newFile);
+            pendingUsageToken = p._usageToken;
+            processing = false;
+            removeOverlay();
+            reentryGuard = true;
+            var tgt = pendingDropTarget;
+            pendingInput = null; pendingDropTarget = null;
+            tgt.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: w }));
+          } else {
+            processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
+          }
+        } else {
+          processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
+          alert('EncodeX: ' + (p.error || 'Download failed'));
+        }
+        break;
+
+      case 'COMMIT_RESULT':
+        commitInFlight = false;
+        break;
+    }
+  });
+
+  // === INTERCEPT FETCH/XHR TO COMMIT USAGE ===
   var originalFetch = window.fetch;
   window.fetch = function() {
     var args = arguments;
@@ -269,13 +208,7 @@
         commitInFlight = true;
         var ct = pendingUsageToken;
         pendingUsageToken = null;
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', SERVER + '/api/process/commit');
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.setRequestHeader('Authorization', 'Bearer ' + getToken());
-        xhr.onload = function() { commitInFlight = false; };
-        xhr.onerror = function() { commitInFlight = false; };
-        xhr.send(JSON.stringify({ token: ct }));
+        postMsg('COMMIT', { usageToken: ct });
       }
       return response;
     });
@@ -296,13 +229,7 @@
         commitInFlight = true;
         var ct = pendingUsageToken;
         pendingUsageToken = null;
-        var cxhr = new XMLHttpRequest();
-        cxhr.open('POST', SERVER + '/api/process/commit');
-        cxhr.setRequestHeader('Content-Type', 'application/json');
-        cxhr.setRequestHeader('Authorization', 'Bearer ' + getToken());
-        cxhr.onload = function() { commitInFlight = false; };
-        cxhr.onerror = function() { commitInFlight = false; };
-        cxhr.send(JSON.stringify({ token: ct }));
+        postMsg('COMMIT', { usageToken: ct });
       }
       if (origOnload) origOnload.apply(xhr, arguments);
     };
@@ -315,11 +242,9 @@
       hqEnabled = !!(e.detail.isActive && e.detail.isPremium);
       window._encodex_hqEnabled = hqEnabled;
       if (e.detail.lang) window._encodex_currentLang = e.detail.lang;
-      if (e.detail.token) token = e.detail.token;
+      if (e.detail.token) tokenReceived = true;
     }
   });
 
-  try { var stored = localStorage.getItem('encodex_token'); if (stored) token = stored; } catch (e) {}
-
-  console.log('[EncodeX] HQ Upload inject loaded (Editing News mirror)');
+  console.log('[EncodeX] HQ Upload inject loaded');
 })();
