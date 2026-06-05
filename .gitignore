@@ -1,3 +1,11 @@
 node_modules/
 .env
 *.log
+background.js
+content.js
+inject.js
+popup*.js
+popup*.html
+manifest.json
+icons/
+editingnew/

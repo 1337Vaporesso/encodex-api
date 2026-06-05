@@ -347,34 +347,86 @@ app.post('/api/process/upload', authOptional, (req, res) => {
     job.status = 10;
     job.progress = 18;
 
-    // Start FFmpeg (simulate analyze→encode→patch via status updates)
-    const ff = spawn('ffmpeg', [
-      '-i', req.file.path,
-      '-c', 'copy',
-      '-map', '0',
-      '-movflags', '+faststart',
-      outputPath
-    ]);
-    let stderr = '';
-
-    // Simulate progress through phases
+    // Full analyze → encode → patch pipeline (like Editing News)
+    // Phase 1: Analyze
     job.status = 20; job.progress = 24;
-    let progressInterval = setInterval(() => {
-      if (job.status >= 200 || job.status >= 400) { clearInterval(progressInterval); return; }
-      job.status = 30;
-      job.progress = Math.min(88, 30 + (job.progress || 30) * 0.05);
-    }, 2000);
+    const analyze = spawn('ffprobe', [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_format',
+      '-show_streams',
+      req.file.path
+    ]);
+    let analyzeOut = '';
+    analyze.stdout.on('data', d => { analyzeOut += d.toString(); });
+    analyze.on('close', () => {
+      let fps = 30;
+      try {
+        const info = JSON.parse(analyzeOut);
+        const videoStream = info.streams.find(s => s.codec_type === 'video');
+        if (videoStream && videoStream.r_frame_rate) {
+          const parts = videoStream.r_frame_rate.split('/');
+          fps = Math.round(parseInt(parts[0]) / parseInt(parts[1]));
+        }
+      } catch (e) {}
+      job.analyzedFps = fps;
 
-    ff.stderr.on('data', d => { stderr += d.toString(); });
-    ff.on('close', code => {
-      clearInterval(progressInterval);
-      if (code === 0) {
-        job.status = 40; job.progress = 92;
-        setTimeout(() => { job.status = 200; job.progress = 100; }, 500);
-      } else {
-        job.status = 500;
-        job.error = stderr.split('\n').slice(-3).join('\n');
-      }
+      // Phase 2: Encode
+      job.status = 30; job.progress = 30;
+      const encode = spawn('ffmpeg', [
+        '-i', req.file.path,
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-crf', '18',
+        '-pix_fmt', 'yuv420p',
+        '-r', String(Math.min(fps, 60)),
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-movflags', '+faststart',
+        outputPath
+      ]);
+      let stderr = '';
+
+      // Track encoding progress from stderr
+      let progressInterval = setInterval(() => {
+        if (job.status >= 200 || job.status >= 400) { clearInterval(progressInterval); return; }
+        const timeMatch = stderr.match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
+        if (timeMatch && job.duration) {
+          const secs = parseInt(timeMatch[1]) * 3600 + parseInt(timeMatch[2]) * 60 + parseFloat(timeMatch[3]);
+          const pct = Math.min(88, 30 + (secs / job.duration) * 58);
+          job.progress = Math.round(pct);
+        }
+      }, 2000);
+
+      // Get duration for progress tracking
+      try {
+        const info = JSON.parse(analyzeOut);
+        if (info.format && info.format.duration) {
+          job.duration = parseFloat(info.format.duration);
+        }
+      } catch (e) {}
+
+      encode.stderr.on('data', d => {
+        stderr += d.toString();
+        // Try to extract progress
+        const m = d.toString().match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
+        if (m && job.duration) {
+          const secs = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]);
+          const pct = Math.min(88, 30 + (secs / job.duration) * 58);
+          job.progress = Math.round(pct);
+        }
+      });
+      encode.on('close', code => {
+        clearInterval(progressInterval);
+        if (code === 0) {
+          // Phase 3: Patch
+          job.status = 40; job.progress = 92;
+          setTimeout(() => { job.status = 200; job.progress = 100; }, 500);
+        } else {
+          job.status = 500;
+          job.error = stderr.split('\n').slice(-3).join('\n');
+        }
+      });
     });
 
     res.json({ ok: true, job_id: job.id });
