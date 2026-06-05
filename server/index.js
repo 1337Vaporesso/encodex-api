@@ -396,6 +396,14 @@ app.post('/api/process/upload', (req, res) => {
 
 async function runFFmpegPipeline(jobId, inputPath, outputPath) {
   try {
+    // Check that ffprobe and ffmpeg are available
+    try {
+      require('child_process').execSync('which ffprobe ffmpeg', { stdio: 'pipe' });
+    } catch (e) {
+      const missing = require('child_process').execSync('which ffprobe 2>/dev/null; which ffmpeg 2>/dev/null; echo DONE', { encoding: 'utf8' });
+      throw new Error('FFmpeg tools not found: ' + missing);
+    }
+
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [20, 24, jobId]);
 
     const analyze = spawn('ffprobe', [
