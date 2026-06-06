@@ -542,13 +542,14 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       await pool.query('UPDATE jobs SET status = $1, error = $2 WHERE id = $3', [500, 'Output dir not writable: ' + we.message, jobId]);
       return;
     }
-    console.log('[EncodeX] copying:', fps + 'fps -> output');
-    const remuxArgs = ['-y', '-i', inputPath, '-c', 'copy', outputPath];
+    // -itsscale 2: PTS ×2 → 60fps → 30fps (как в bat патчере)
+    const itsscale = fps >= 60 ? Math.round(fps / 30) : 1;
+    console.log('[EncodeX] remux:', fps + 'fps -> ~' + Math.round(fps / Math.max(1, itsscale)) + 'fps');
+    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', outputPath];
     await execFFmpeg(jobId, remuxArgs, duration);
-    // Проверяем что файл создан
     if (!fs.existsSync(outputPath)) {
       console.error('[EncodeX] FFmpeg exit 0 but output not found:', outputPath);
-      throw new Error('FFmpeg reported success but output file missing');
+      throw new Error('FFmpeg output missing');
     }
 
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [40, 92, jobId]);
@@ -591,15 +592,14 @@ app.get('/api/process/result', async (req, res) => {
 
     res.download(job.output_path, 'video.mp4', async function(err) {
       if (err) console.error('Download error:', err.message);
-      // Clean up files
-      if (job.input_path) fs.unlink(job.input_path, () => {});
-      if (job.output_path) fs.unlink(job.output_path, () => {});
-      // Clean up tokens
-      await pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]);
-      // Clean up job after 5 min
-      setTimeout(async () => {
-        await pool.query('DELETE FROM jobs WHERE id = $1', [jobId]);
-      }, 300000);
+      // Clean up tokens immediately (не блокирует повторную скачку)
+      await pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
+      // Удаляем файлы через 30 мин (чтобы ретраи клиента успели)
+      setTimeout(() => {
+        if (job.input_path) fs.unlink(job.input_path, () => {});
+        if (job.output_path) fs.unlink(job.output_path, () => {});
+        pool.query('DELETE FROM jobs WHERE id = $1', [jobId]).catch(() => {});
+      }, 1800000);
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
