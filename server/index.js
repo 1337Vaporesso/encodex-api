@@ -576,6 +576,9 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     // 1-pass with 1.35x compensation factor for 24MB target
     const compBitrateK = Math.round(videoBitrateK * 1.35);
 
+    // Force 29.97fps — TikTok не ресайзит 30fps видео (ресайзит 60fps → 576p)
+    const TARGET_FPS = 29.97;
+
     const encodeArgs = [
       '-i', inputPath,
       '-c:v', 'libx264',
@@ -586,6 +589,7 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       '-pix_fmt', 'yuv420p',
       '-profile:v', 'high',
       '-level', '4.2',
+      '-r', String(TARGET_FPS),
       '-threads', '2',
       '-c:a', 'aac',
       '-b:a', '192k',
