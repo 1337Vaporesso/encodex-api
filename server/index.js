@@ -452,7 +452,9 @@ app.post('/api/process/upload', (req, res) => {
               'UPDATE jobs SET input_path = $1, output_path = $2, status = $3, progress = $4 WHERE id = $5',
               [inputPath, outputPath, 10, 18, jobRow.id]
             ).then(function() {
-              runFFmpegPipeline(jobRow.id, inputPath, outputPath);
+              runFFmpegPipeline(jobRow.id, inputPath, outputPath).catch(function(e) {
+                console.error('Pipeline unhandled:', e.message);
+              });
             }).catch(function(e) {
               console.error('DB update error:', e.message);
             });
@@ -509,63 +511,31 @@ async function execFFmpeg(jobId, args, duration) {
 
 async function runFFmpegPipeline(jobId, inputPath, outputPath) {
   try {
-    await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [20, 24, jobId]);
-
-    const analyze = spawn(ffprobePath, [
-      '-v', 'quiet',
-      '-print_format', 'json',
-      '-show_format',
-      '-show_streams',
-      inputPath
-    ]);
-    let analyzeOut = '';
-    analyze.stdout.on('data', d => { analyzeOut += d.toString(); });
-
-    await new Promise((resolve, reject) => {
-      analyze.on('close', code => code === 0 ? resolve() : reject(new Error('ffprobe failed')));
-      analyze.on('error', reject);
-    });
-
-    let fps = 30;
-    let width = 0;
-    let height = 0;
-    let codec = '';
-    let duration = 0;
+    // Status 20: ffprobe (опционально, не блокирует pipeline)
+    let fps = 60, duration = 0;
     try {
-      const info = JSON.parse(analyzeOut);
+      const analyze = spawn(ffprobePath, ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', inputPath]);
+      let out = '';
+      analyze.stdout.on('data', d => { out += d.toString(); });
+      await new Promise((res, rej) => { analyze.on('close', c => c === 0 ? res() : rej()); analyze.on('error', rej); });
+      const info = JSON.parse(out);
       const vs = info.streams.find(s => s.codec_type === 'video');
       if (vs) {
-        width = vs.width || 0;
-        height = vs.height || 0;
-        codec = vs.codec_name || '';
-        // avg_frame_rate is more reliable than r_frame_rate for VFR
-        let rateStr = vs.avg_frame_rate || vs.r_frame_rate || '30/1';
-        const parts = rateStr.split('/');
-        const num = parseFloat(parts[0]);
-        const den = parseFloat(parts[1]) || 1;
-        if (num > 0 && den > 0) fps = Math.round(num / den);
-        if (fps < 1 || fps > 240) fps = 30;
+        const r = (vs.avg_frame_rate || vs.r_frame_rate || '30/1').split('/');
+        fps = (parseFloat(r[0]) / (parseFloat(r[1]) || 1));
+        if (fps < 1 || fps > 240) fps = 60;
+        fps = Math.round(fps);
       }
-      if (info.format && info.format.duration) {
-        duration = parseFloat(info.format.duration);
-      }
-    } catch (e) {}
+      if (info.format && info.format.duration) duration = parseFloat(info.format.duration);
+    } catch (e) { console.log('[EncodeX] ffprobe failed, using defaults fps=60'); }
 
-    console.log('[EncodeX] source:', width + 'x' + height, codec, fps + 'fps', duration + 's');
+    console.log('[EncodeX] source:', (fps || '?') + 'fps', (duration || '?') + 's');
+    await pool.query('UPDATE jobs SET status = $1, progress = $2, duration = $3, analyzed_fps = $4 WHERE id = $5', [30, 30, duration, fps, jobId]);
 
-    await pool.query(
-      'UPDATE jobs SET status = $1, progress = $2, duration = $3, analyzed_fps = $4 WHERE id = $5',
-      [30, 30, duration, fps, jobId]
-    );
-
-    // Масштабируем временные метки PTS: fps -> 30fps
-    // -itsscale N умножает PTS всех пакетов на N (без ре-энкода, -c copy)
-    // TikTok видит 30fps → не запускает frame-drop → не ресайзит до 576p
-    let itsscale = 1;
-    if (fps >= 60) itsscale = Math.round(fps / 30);
-    if (itsscale < 2) itsscale = 1; // не трогаем если уже ≤30fps
-    console.log('[EncodeX] itsscale:', width + 'x' + height, fps + 'fps -> ~30fps (itsscale=' + itsscale + ')');
-    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c', 'copy', '-movflags', '+faststart', outputPath];
+    // -itsscale 2 (как bat патчер): PTS ×2 → 60fps → 30fps, без ре-энкода
+    const itsscale = fps >= 60 ? Math.round(fps / 30) : 1;
+    console.log('[EncodeX] itsscale=' + itsscale + ' ' + fps + 'fps -> ~' + Math.round(fps / Math.max(1, itsscale)) + 'fps');
+    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', outputPath];
     await execFFmpeg(jobId, remuxArgs, duration);
 
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [40, 92, jobId]);
@@ -573,8 +543,8 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [200, 100, jobId]);
 
   } catch (e) {
-    console.error('FFmpeg pipeline error:', e.message);
-    await pool.query('UPDATE jobs SET status = $1, error = $2 WHERE id = $3', [500, e.message, jobId]);
+    console.error('[EncodeX] pipeline error:', e.message);
+    try { await pool.query('UPDATE jobs SET status = $1, error = $2 WHERE id = $3', [500, e.message, jobId]); } catch (dbErr) {}
   }
 }
 
