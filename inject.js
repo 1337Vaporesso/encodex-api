@@ -55,6 +55,43 @@
     };
   }
 
+  // === MediaRecorder interceptor (check if TikTok uses client-side re-encode) ===
+  if (!window._enx_mrPatched) {
+    window._enx_mrPatched = true;
+    var _origMR = window.MediaRecorder;
+
+    function _mrWrapInstance(inst) {
+      var _origStart = inst.start;
+      inst.start = function(timeslice) {
+        console.log('[EncodeX] MediaRecorder.start(' + timeslice + ')');
+        // Eventually here: override ondataavailable to inject our 1080p blob
+        return _origStart.call(this, timeslice);
+      };
+      var _origStop = inst.stop;
+      inst.stop = function() {
+        console.log('[EncodeX] MediaRecorder.stop()');
+        return _origStop.call(this);
+      };
+      return inst;
+    }
+
+    window.MediaRecorder = function(stream, options) {
+      console.log('[EncodeX] MediaRecorder CREATED: mime=' + (options ? options.mimeType : 'none') + ' videoBits=' + (options ? options.videoBitsPerSecond : 'none'));
+      var tracks = stream && stream.getTracks ? stream.getTracks() : [];
+      for (var t = 0; t < tracks.length; t++) console.log('[EncodeX]   track:', tracks[t].kind, tracks[t].label, tracks[t].getSettings ? JSON.stringify(tracks[t].getSettings()) : '');
+      var inst = new _origMR(stream, options);
+      return _mrWrapInstance(inst);
+    };
+    window.MediaRecorder.prototype = _origMR.prototype;
+    // Copy static methods
+    window.MediaRecorder.isTypeSupported = function(mime) {
+      var r = _origMR.isTypeSupported(mime);
+      console.log('[EncodeX] MediaRecorder.isTypeSupported(' + mime + ') -> ' + r);
+      return r;
+    };
+    console.log('[EncodeX] MediaRecorder interceptor active');
+  }
+
   function showOverlay(file) {
     var existing = document.getElementById('encodex-hq-overlay');
     if (existing) existing.remove();
