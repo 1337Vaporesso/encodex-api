@@ -33,17 +33,25 @@
       } catch(_e) { console.warn('[EncodeX] fake blob init:', _e); }
     }
     _makeFakeBlob();
+    console.log('[EncodeX] fake blob loaded: size=' + (_fake1080pBlob ? _fake1080pBlob.size : 'N/A') + ' url=' + (_fake1080pUrl || 'N/A'));
     // Protect our fake URL from being revoked by TikTok
     URL.revokeObjectURL = function(url) {
-      if (url === _fake1080pUrl) return;
+      if (url === _fake1080pUrl) { console.log('[EncodeX] blocked revoke of fake blob URL'); return; }
       return _origRevokeURL.call(URL, url);
     };
     URL.createObjectURL = function(obj) {
-      if (hqEnabled && obj instanceof Blob && obj.type && obj.type.indexOf('video/') === 0) {
+      var isVideoBlob = obj instanceof Blob && obj.type && obj.type.indexOf('video/') === 0;
+      if (isVideoBlob) console.log('[EncodeX] URL.createObjectURL called: size=' + (obj.size || '?') + ' type=' + (obj.type || '?'));
+      if (hqEnabled && isVideoBlob) {
         if (!_fake1080pUrl) _makeFakeBlob();
-        if (_fake1080pUrl) return _fake1080pUrl;
+        if (_fake1080pUrl) {
+          console.log('[EncodeX] URL.createObjectURL -> returning FAKE blob (2KB 1080p), real size was ' + (obj.size || '?'));
+          return _fake1080pUrl;
+        }
       }
-      return _origCreateURL.call(URL, obj);
+      var realUrl = _origCreateURL.call(URL, obj);
+      if (isVideoBlob) console.log('[EncodeX] URL.createObjectURL -> returning REAL blob:', realUrl);
+      return realUrl;
     };
   }
 
@@ -192,7 +200,9 @@
 
       case 'DOWNLOAD_RESULT':
         if (p.ok && p.buffer) {
+          console.log('[EncodeX] DOWNLOAD_RESULT buffer size:', p.buffer.size || p.buffer.byteLength || '?');
           var newFile = new File([p.buffer], pendingFileName, { type: pendingFileType, lastModified: Date.now() });
+          console.log('[EncodeX] dispatching file to TikTok:', newFile.size + 'bytes', newFile.type);
           if (pendingInput) {
             var dt = new DataTransfer();
             dt.items.add(newFile);
@@ -302,76 +312,97 @@
     var init = args[1] || {};
     var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
 
-    if (hqEnabled && url && _isTikTokApi(url)) {
-      console.log('[EncodeX] fetch intercepted:', url.substr(0, 200));
-      var body = init.body;
+    if (hqEnabled && url) {
+      var isTikTok = _isTikTokApi(url);
+      if (isTikTok) {
+        var body = init.body;
+        var bodyPreview = '';
+        if (typeof body === 'string') bodyPreview = body.substr(0, 600);
+        else if (body && typeof body === 'object' && body.toString) bodyPreview = body.toString().substr(0, 600);
+        console.log('[EncodeX] FETCH:', (init.method || 'POST'), url.substr(0, 200), 'body=[' + bodyPreview + ']');
+      }
 
-      // Extract body as string if possible
-      var bodyStr = '';
-      if (typeof body === 'string') bodyStr = body;
-      else if (body && typeof body === 'object' && body.toString) bodyStr = body.toString();
+      if (isTikTok) {
+        // Extract body as string if possible
+        var bodyStr = '';
+        if (typeof body === 'string') bodyStr = body;
+        else if (body && typeof body === 'object' && body.toString) bodyStr = body.toString();
 
-      if (bodyStr) {
-        // Fast path: local patch first (no network)
-        var localPatched = patchBody1080p(bodyStr, url);
-        if (localPatched !== bodyStr) {
-          init.body = localPatched;
-          return originalFetch.call(this, input, init).then(function(resp) {
-            var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-            if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && resp && resp.ok) {
-              commitInFlight = true;
-              var ct = pendingUsageToken;
-              pendingUsageToken = null;
-              postMsg('COMMIT', { usageToken: ct });
-            }
-            return resp;
-          });
-        }
+        if (bodyStr) {
+          // Fast path: local patch first (no network)
+          var localPatched = patchBody1080p(bodyStr, url);
+          if (localPatched !== bodyStr) {
+            init.body = localPatched;
+            console.log('[EncodeX] FETCH -> locally patched');
+            return originalFetch.call(this, input, init).then(function(resp) {
+              resp.clone().text().then(function(t) { console.log('[EncodeX] FETCH response:', t.substr(0, 600)); }).catch(function(){});
+              var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+              if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && resp && resp.ok) {
+                commitInFlight = true;
+                var ct = pendingUsageToken;
+                pendingUsageToken = null;
+                postMsg('COMMIT', { usageToken: ct });
+              }
+              return resp;
+            });
+          }
 
-        // Slow path: server transform via content.js (CSP-safe)
-        // Skip for huge bodies (>100KB)
-        if (bodyStr.length < 100000) {
-          var tid = ++_enxTid;
-          return new Promise(function(resolve, reject) {
-            var to;
-            var onMsg = function(e) {
-              if (e.data.source !== 'encodex-content' || e.data.type !== 'TRANSFORM_RESULT') return;
-              if (e.data.payload && e.data.payload._tid !== tid) return;
-              window.removeEventListener('message', onMsg);
-              clearTimeout(to);
-              if (e.data.payload && e.data.payload.body) init.body = e.data.payload.body;
-              originalFetch.call(window, input, init).then(function(resp) {
-                var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-                if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && resp && resp.ok) {
-                  commitInFlight = true;
-                  var ct = pendingUsageToken;
-                  pendingUsageToken = null;
-                  postMsg('COMMIT', { usageToken: ct });
+          // Slow path: server transform via content.js (CSP-safe)
+          if (bodyStr.length < 100000) {
+            var tid = ++_enxTid;
+            return new Promise(function(resolve, reject) {
+              var to;
+              var onMsg = function(e) {
+                if (e.data.source !== 'encodex-content' || e.data.type !== 'TRANSFORM_RESULT') return;
+                if (e.data.payload && e.data.payload._tid !== tid) return;
+                window.removeEventListener('message', onMsg);
+                clearTimeout(to);
+                var wasPatched = e.data.payload && e.data.payload.body && e.data.payload.body !== bodyStr;
+                if (wasPatched) {
+                  init.body = e.data.payload.body;
+                  console.log('[EncodeX] FETCH -> server patched (was ' + bodyStr.length + ' -> ' + init.body.length + ' bytes)');
+                } else {
+                  console.log('[EncodeX] FETCH -> server returned unchanged body');
                 }
-                resolve(resp);
-              });
-            };
-            window.addEventListener('message', onMsg);
-            to = setTimeout(function() {
-              window.removeEventListener('message', onMsg);
-              originalFetch.call(window, input, init).then(function(resp) {
-                var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-                if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && resp && resp.ok) {
-                  commitInFlight = true;
-                  var ct = pendingUsageToken;
-                  pendingUsageToken = null;
-                  postMsg('COMMIT', { usageToken: ct });
-                }
-                resolve(resp);
-              });
-            }, 5000);
-            window.postMessage({ source: 'encodex-inject', type: 'TRANSFORM', payload: { body: bodyStr, url: url, _tid: tid } }, '*');
-          });
+                originalFetch.call(window, input, init).then(function(resp) {
+                  resp.clone().text().then(function(t) { console.log('[EncodeX] FETCH response:', t.substr(0, 600)); }).catch(function(){});
+                  var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+                  if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && resp && resp.ok) {
+                    commitInFlight = true;
+                    var ct = pendingUsageToken;
+                    pendingUsageToken = null;
+                    postMsg('COMMIT', { usageToken: ct });
+                  }
+                  resolve(resp);
+                });
+              };
+              window.addEventListener('message', onMsg);
+              to = setTimeout(function() {
+                window.removeEventListener('message', onMsg);
+                console.log('[EncodeX] FETCH -> transform timed out, using original body');
+                originalFetch.call(window, input, init).then(function(resp) {
+                  resp.clone().text().then(function(t) { console.log('[EncodeX] FETCH response:', t.substr(0, 600)); }).catch(function(){});
+                  var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+                  if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && resp && resp.ok) {
+                    commitInFlight = true;
+                    var ct = pendingUsageToken;
+                    pendingUsageToken = null;
+                    postMsg('COMMIT', { usageToken: ct });
+                  }
+                  resolve(resp);
+                });
+              }, 5000);
+              window.postMessage({ source: 'encodex-inject', type: 'TRANSFORM', payload: { body: bodyStr, url: url, _tid: tid } }, '*');
+            });
+          }
         }
       }
     }
 
     return originalFetch.call(this, input, init).then(function(response) {
+      if (url && _isTikTokApi(url)) {
+        response.clone().text().then(function(t) { console.log('[EncodeX] FETCH (not intercepted) response:', t.substr(0, 600)); }).catch(function(){});
+      }
       var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
       if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && response && response.ok) {
         commitInFlight = true;
@@ -393,18 +424,25 @@
   XMLHttpRequest.prototype.send = function(body) {
     var xhr = this;
     var url = xhr._en_url || '';
+    var isTikTok = hqEnabled && url && _isTikTokApi(url);
 
-    if (hqEnabled && url) {
-      if (_isTikTokApi(url)) {
-        console.log('[EncodeX] XHR intercepted:', (xhr._en_method || 'GET'), url.substr(0, 200));
-        if (typeof body === 'string') {
-          body = patchBody1080p(body, url);
+    if (isTikTok) {
+      console.log('[EncodeX] XHR:', (xhr._en_method || 'GET'), url.substr(0, 200), 'body=[' + (typeof body === 'string' ? body.substr(0, 600) : (body && body.toString ? body.toString().substr(0, 600) : '')) + ']');
+      if (typeof body === 'string') {
+        var patched = patchBody1080p(body, url);
+        if (patched !== body) {
+          body = patched;
+          console.log('[EncodeX] XHR -> locally patched');
+        } else {
+          console.log('[EncodeX] XHR -> local patch no change');
         }
       }
     }
 
     var origOnload = xhr.onload;
+    var origOnreadystatechange = xhr.onreadystatechange;
     xhr.onload = function() {
+      if (isTikTok) console.log('[EncodeX] XHR response status=' + xhr.status + ' body=[' + (typeof xhr.responseText === 'string' ? xhr.responseText.substr(0, 600) : '') + ']');
       if (pendingUsageToken && !commitInFlight && url.indexOf('project/post') !== -1 && xhr.status >= 200 && xhr.status < 300) {
         commitInFlight = true;
         var ct = pendingUsageToken;
@@ -413,6 +451,12 @@
       }
       if (origOnload) origOnload.apply(xhr, arguments);
     };
+    if (origOnreadystatechange) {
+      xhr.onreadystatechange = function() {
+        if (isTikTok && xhr.readyState === 4) console.log('[EncodeX] XHR readystatechange DONE status=' + xhr.status);
+        if (origOnreadystatechange) origOnreadystatechange.apply(xhr, arguments);
+      };
+    }
     return origXHRSend.call(xhr, body);
   };
   console.log('[EncodeX] fetch/XHR interceptors active');
