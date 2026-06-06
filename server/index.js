@@ -558,63 +558,15 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       [30, 30, duration, fps, jobId]
     );
 
-    // Target: 24MB output exactly (matching Editing News)
-    // Calculate video bitrate from duration to hit 24MB:
-    // total_bits = 24MB * 8 = 201,326,592 bits
-    // video_bps = (total_bits / duration) - audio_bitrate
-    const AUDIO_BITRATE = 192000; // 192 kbps
-    const TARGET_BYTES = 24 * 1024 * 1024;
-    let videoBitrate = 3000000; // default 3 Mbps
-    if (duration > 1) {
-      const totalBits = TARGET_BYTES * 8;
-      const totalBps = totalBits / duration;
-      videoBitrate = Math.round(Math.max(500000, Math.min(20000000, totalBps - AUDIO_BITRATE)));
-    }
-    const videoBitrateK = Math.round(videoBitrate / 1000);
-    console.log('[EncodeX] target', (videoBitrateK) + 'k video bitrate for', (duration || 60).toFixed(1), 's ->', TARGET_BYTES + 'B');
-
-    // 1-pass with 1.35x compensation factor for 24MB target
-    const compBitrateK = Math.round(videoBitrateK * 1.35);
-
-    // Force 29.97fps — TikTok не ресайзит 30fps видео (ресайзит 60fps → 576p)
-    const TARGET_FPS = 29.97;
-
-    const encodeArgs = [
-      '-i', inputPath,
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-b:v', compBitrateK + 'k',
-      '-maxrate', Math.round(compBitrateK * 1.5) + 'k',
-      '-bufsize', Math.round(compBitrateK * 2) + 'k',
-      '-pix_fmt', 'yuv420p',
-      '-profile:v', 'high',
-      '-level', '4.2',
-      '-r', String(TARGET_FPS),
-      '-threads', '2',
-      '-c:a', 'aac',
-      '-b:a', '192k',
-      '-movflags', '+faststart',
-      '-max_muxing_queue_size', '1024',
-      outputPath
-    ];
-    console.log('[EncodeX] encode:', width + 'x' + height, fps + 'fps', compBitrateK + 'kbit');
-    try {
-      await execFFmpeg(jobId, encodeArgs, duration);
-    } catch (e1) {
-      if (e1.message.includes('code 1') || e1.message.includes('code null')) {
-        console.log('[EncodeX] libx264 failed, retrying h264');
-        const altArgs = encodeArgs.map(a => a === 'libx264' ? 'h264' : a);
-        try {
-          await execFFmpeg(jobId, altArgs, duration);
-        } catch (e2) {
-          console.log('[EncodeX] encode failed, falling back to stream copy');
-          const copyArgs = ['-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart', outputPath];
-          await execFFmpeg(jobId, copyArgs, duration);
-        }
-      } else {
-        throw e1;
-      }
-    }
+    // Масштабируем временные метки PTS: fps -> 30fps
+    // -itsscale N умножает PTS всех пакетов на N (без ре-энкода, -c copy)
+    // TikTok видит 30fps → не запускает frame-drop → не ресайзит до 576p
+    let itsscale = 1;
+    if (fps >= 60) itsscale = Math.round(fps / 30);
+    if (itsscale < 2) itsscale = 1; // не трогаем если уже ≤30fps
+    console.log('[EncodeX] itsscale:', width + 'x' + height, fps + 'fps -> ~30fps (itsscale=' + itsscale + ')');
+    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c', 'copy', '-movflags', '+faststart', outputPath];
+    await execFFmpeg(jobId, remuxArgs, duration);
 
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [40, 92, jobId]);
     await new Promise(r => setTimeout(r, 500));
