@@ -15,6 +15,18 @@
   window._encodex_hqEnabled = false;
   window._encodex_currentLang = 'ru';
 
+  // === Override URL.createObjectURL to hide real resolution from TikTok ===
+  if (!window._enx_urlPatched) {
+    window._enx_urlPatched = true;
+    var _origCreateURL = URL.createObjectURL;
+    URL.createObjectURL = function(obj) {
+      if (hqEnabled && obj instanceof Blob && obj.type && obj.type.indexOf('video/') === 0) {
+        return 'blob:' + location.origin + '/' + Date.now();
+      }
+      return _origCreateURL.call(URL, obj);
+    };
+  }
+
   function showOverlay(file) {
     var existing = document.getElementById('encodex-hq-overlay');
     if (existing) existing.remove();
@@ -198,11 +210,43 @@
     }
   });
 
-  // === INTERCEPT FETCH/XHR TO COMMIT USAGE ===
+  // === INTERCEPT FETCH/XHR: 1) inject 1080p into create, 2) commit after project/post ===
+  function patchBody1080p(bodyStr) {
+    if (!bodyStr || typeof bodyStr !== 'string') return bodyStr;
+    try {
+      var b = JSON.parse(bodyStr);
+      var changed = false;
+      // Set 1080p resolution fields for TikTok API
+      if (!b.width || b.width < 1080) { b.width = 1080; changed = true; }
+      if (!b.height || b.height < 1920) { b.height = 1920; changed = true; }
+      // Portrait mode check (if height < width, swap)
+      if (b.width && b.height && b.width > b.height) {
+        b.width = 1920; b.height = 1080;
+      }
+      if (changed) return JSON.stringify(b);
+    } catch(e) {}
+    return bodyStr;
+  }
+
   var originalFetch = window.fetch;
   window.fetch = function() {
     var args = arguments;
-    var url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
+    var input = args[0];
+    var init = args[1] || {};
+    var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+    
+    // Inject 1080p into create/post requests
+    if (hqEnabled && url && (url.indexOf('create?') !== -1 || url.indexOf('project/post') !== -1)) {
+      var body = init.body || '';
+      if (typeof body === 'string') {
+        var patched = patchBody1080p(body);
+        if (patched !== body) {
+          if (args[1]) args[1].body = patched;
+          else { args[0] = new Request(input, { body: patched, method: init.method }); }
+        }
+      }
+    }
+    
     return originalFetch.apply(this, args).then(function(response) {
       if (pendingUsageToken && !commitInFlight && url && url.indexOf('project/post') !== -1 && response.ok) {
         commitInFlight = true;
@@ -223,6 +267,12 @@
   XMLHttpRequest.prototype.send = function(body) {
     var xhr = this;
     var url = xhr._en_url || '';
+    
+    // Inject 1080p into create/post requests
+    if (hqEnabled && url && (url.indexOf('create?') !== -1 || url.indexOf('project/post') !== -1)) {
+      body = patchBody1080p(body);
+    }
+    
     var origOnload = xhr.onload;
     xhr.onload = function() {
       if (pendingUsageToken && !commitInFlight && url.indexOf('project/post') !== -1 && xhr.status >= 200 && xhr.status < 300) {
@@ -233,7 +283,7 @@
       }
       if (origOnload) origOnload.apply(xhr, arguments);
     };
-    return origXHRSend.apply(this, arguments);
+    return origXHRSend.call(xhr, body);
   };
 
   // === LISTEN FOR STATE CHANGES ===
