@@ -509,7 +509,7 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     const encodeArgs = [
       '-i', inputPath,
       '-c:v', 'libx264',
-      '-preset', 'veryfast',
+      '-preset', 'ultrafast',
       '-b:v', compBitrateK + 'k',
       '-maxrate', Math.round(compBitrateK * 1.5) + 'k',
       '-bufsize', Math.round(compBitrateK * 2) + 'k',
