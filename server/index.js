@@ -542,8 +542,8 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       await pool.query('UPDATE jobs SET status = $1, error = $2 WHERE id = $3', [500, 'Output dir not writable: ' + we.message, jobId]);
       return;
     }
-    // -itsscale 2: PTS ×2 → 60fps → 30fps (как в bat патчере)
-    const itsscale = fps >= 60 ? Math.round(fps / 30) : 1;
+    // -itsscale как в bat: 60fps→2, 120fps→6, 240fps→12
+    const itsscale = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1));
     console.log('[EncodeX] remux:', fps + 'fps -> ~' + Math.round(fps / Math.max(1, itsscale)) + 'fps');
     const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', outputPath];
     await execFFmpeg(jobId, remuxArgs, duration);
