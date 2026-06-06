@@ -265,15 +265,20 @@
             if (set1080p(v)) c = true;
           }
           if (typeof v === 'number' && v > 0) {
-            if (k === 'width' && v < 1080) { obj.width = 1080; c = true; }
-            if (k === 'height' && v < 1920) { obj.height = 1920; c = true; }
+            // Ensure the smaller dimension is at least 1080
+            // For landscape (width > height): height ≥ 1080
+            // For portrait (height > width): width ≥ 1080
+            if (k === 'width' && obj.height !== undefined) {
+              var isPortrait = obj.height > v;
+              if (isPortrait && v < 1080) { obj.width = 1080; c = true; }
+              else if (!isPortrait && v < 1920) { obj.width = 1920; c = true; }
+            }
+            if (k === 'height' && obj.width !== undefined) {
+              var isLandscape = obj.width > v;
+              if (isLandscape && v < 1080) { obj.height = 1080; c = true; }
+              else if (!isLandscape && v < 1920) { obj.height = 1920; c = true; }
+            }
           }
-        }
-
-        // Portrait/landscape correction: if width > height (landscape), force 1920x1080
-        if (obj.width && obj.height && obj.width > obj.height) {
-          if (obj.width !== 1920) { obj.width = 1920; c = true; }
-          if (obj.height !== 1080) { obj.height = 1080; c = true; }
         }
         return c;
       }
