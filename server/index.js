@@ -532,11 +532,10 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     console.log('[EncodeX] source:', (fps || '?') + 'fps', (duration || '?') + 's');
     await pool.query('UPDATE jobs SET status = $1, progress = $2, duration = $3, analyzed_fps = $4 WHERE id = $5', [30, 30, duration, fps, jobId]);
 
-    // Меняем timescale в MP4 контейнере: 60fps → 29.97fps, без ре-энкода
-    // -video_track_timescale меняет timescale в moov/mdia/mdhd — стандарт MP4
-    const timescale = 29970; // 29.97fps * 1000
-    console.log('[EncodeX] fps:', fps + 'fps -> ~30fps (video_track_timescale=' + timescale + ')');
-    const remuxArgs = ['-y', '-i', inputPath, '-c', 'copy', '-video_track_timescale', String(timescale), outputPath];
+    // Копируем файл без ре-энкода (FFmpeg c -c copy)
+    // Потом добавим FPS change если copy работает
+    console.log('[EncodeX] copying:', fps + 'fps -> output');
+    const remuxArgs = ['-y', '-i', inputPath, '-c', 'copy', outputPath];
     await execFFmpeg(jobId, remuxArgs, duration);
 
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [40, 92, jobId]);
