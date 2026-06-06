@@ -131,6 +131,76 @@ function auth(req, res, next) {
   }
 }
 
+/* ===== Routes: Transform body for TikTok HQ (Editing News style) ===== */
+app.post('/api/transform', (req, res) => {
+  try {
+    const { body: rawBody, url: reqUrl } = req.body;
+    if (!rawBody) return res.json({ body: rawBody || '' });
+
+    console.log('[EncodeX] /api/transform:', (reqUrl || '').substr(0, 150));
+
+    let parsed;
+    try { parsed = JSON.parse(rawBody); } catch(e) { return res.json({ body: rawBody }); }
+
+    let changed = false;
+
+    function deepPatch(obj, depth) {
+      if (!obj || typeof obj !== 'object' || depth > 20) return;
+      // Handle arrays
+      if (Array.isArray(obj)) {
+        for (let i = 0; i < obj.length; i++) {
+          if (obj[i] && typeof obj[i] === 'object') deepPatch(obj[i], depth + 1);
+        }
+        return;
+      }
+      // Check this level for known quality fields
+      if (typeof obj.width === 'number' && typeof obj.height === 'number' && obj.width > 0 && obj.height > 0) {
+        const isPortrait = obj.height > obj.width;
+        if (isPortrait && obj.width < 1080) { obj.width = 1080; changed = true; }
+        else if (!isPortrait && obj.height < 1080) { obj.height = 1080; changed = true; }
+        // Also ensure the larger side is at least 1920 for landscape, 1080 for portrait
+        if (!isPortrait && obj.width < 1920) { obj.width = 1920; changed = true; }
+        if (isPortrait && obj.height < 1920) { obj.height = 1920; changed = true; }
+      }
+      // Patch fps fields
+      for (const fpsKey of ['fps', 'frame_rate', 'video_frame_rate']) {
+        if (typeof obj[fpsKey] === 'number' && obj[fpsKey] < 60 && obj[fpsKey] > 0) {
+          obj[fpsKey] = 60; changed = true;
+        }
+      }
+      // Patch bitrate fields
+      for (const brKey of ['bitrate', 'video_bitrate', 'max_bitrate']) {
+        if (typeof obj[brKey] === 'number' && obj[brKey] < 27000000 && obj[brKey] > 0) {
+          obj[brKey] = 27000000; changed = true;
+        }
+      }
+      // Add hqProcessed flag at every level (TikTok might check anywhere)
+      if (obj.hqProcessed === undefined || obj.hqProcessed === false) {
+        obj.hqProcessed = true; changed = true;
+      }
+      // Recurse
+      for (const k in obj) {
+        if (obj[k] && typeof obj[k] === 'object') deepPatch(obj[k], depth + 1);
+      }
+    }
+
+    deepPatch(parsed, 0);
+
+    if (changed) {
+      const result = JSON.stringify(parsed);
+      console.log('[EncodeX] transform patched, body length:', result.length);
+      if (result.length < 50000) console.log('[EncodeX] patched:', result.substr(0, 2000));
+      return res.json({ body: result });
+    }
+    console.log('[EncodeX] transform no changes needed');
+    return res.json({ body: rawBody });
+  } catch(e) {
+    console.error('[EncodeX] transform error:', e.message);
+    if (req.body && req.body.body) return res.json({ body: req.body.body });
+    return res.json({ body: '' });
+  }
+});
+
 /* ===== Routes: Auth & Admin (existing) ===== */
 app.get('/', function(req, res) { res.json({ ok: true, status: 'running' }); });
 app.post('/api/register', async (req, res) => {

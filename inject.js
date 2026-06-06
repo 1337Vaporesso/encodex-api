@@ -292,6 +292,9 @@
     return bodyStr;
   }
 
+  // TRANSFORM request counter (unique ID for each call)
+  var _enxTid = 0;
+
   var originalFetch = window.fetch;
   window.fetch = function() {
     var args = arguments;
@@ -299,30 +302,78 @@
     var init = args[1] || {};
     var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
 
-    if (hqEnabled && url) {
-      if (_isTikTokApi(url)) {
-        console.log('[EncodeX] fetch intercepted:', url.substr(0, 200));
-        // Try to parse and patch body
-        var body = init.body;
-        if (typeof body === 'string') {
-          var patched = patchBody1080p(body, url);
-          if (patched !== body) init.body = patched;
-        } else if (body && typeof body === 'object') {
-          // URLSearchParams or FormData
-          try {
-            var sp = body.toString ? body.toString() : '';
-            if (sp) {
-              var patched = patchBody1080p(sp, url);
-              if (patched !== sp) init.body = patched;
+    if (hqEnabled && url && _isTikTokApi(url)) {
+      console.log('[EncodeX] fetch intercepted:', url.substr(0, 200));
+      var body = init.body;
+
+      // Extract body as string if possible
+      var bodyStr = '';
+      if (typeof body === 'string') bodyStr = body;
+      else if (body && typeof body === 'object' && body.toString) bodyStr = body.toString();
+
+      if (bodyStr) {
+        // Fast path: local patch first (no network)
+        var localPatched = patchBody1080p(bodyStr, url);
+        if (localPatched !== bodyStr) {
+          init.body = localPatched;
+          return originalFetch.call(this, input, init).then(function(resp) {
+            var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+            if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && resp && resp.ok) {
+              commitInFlight = true;
+              var ct = pendingUsageToken;
+              pendingUsageToken = null;
+              postMsg('COMMIT', { usageToken: ct });
             }
-          } catch(se) {}
+            return resp;
+          });
+        }
+
+        // Slow path: server transform via content.js (CSP-safe)
+        // Skip for huge bodies (>100KB)
+        if (bodyStr.length < 100000) {
+          var tid = ++_enxTid;
+          return new Promise(function(resolve, reject) {
+            var to;
+            var onMsg = function(e) {
+              if (e.data.source !== 'encodex-content' || e.data.type !== 'TRANSFORM_RESULT') return;
+              if (e.data.payload && e.data.payload._tid !== tid) return;
+              window.removeEventListener('message', onMsg);
+              clearTimeout(to);
+              if (e.data.payload && e.data.payload.body) init.body = e.data.payload.body;
+              originalFetch.call(window, input, init).then(function(resp) {
+                var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+                if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && resp && resp.ok) {
+                  commitInFlight = true;
+                  var ct = pendingUsageToken;
+                  pendingUsageToken = null;
+                  postMsg('COMMIT', { usageToken: ct });
+                }
+                resolve(resp);
+              });
+            };
+            window.addEventListener('message', onMsg);
+            to = setTimeout(function() {
+              window.removeEventListener('message', onMsg);
+              originalFetch.call(window, input, init).then(function(resp) {
+                var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+                if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && resp && resp.ok) {
+                  commitInFlight = true;
+                  var ct = pendingUsageToken;
+                  pendingUsageToken = null;
+                  postMsg('COMMIT', { usageToken: ct });
+                }
+                resolve(resp);
+              });
+            }, 5000);
+            window.postMessage({ source: 'encodex-inject', type: 'TRANSFORM', payload: { body: bodyStr, url: url, _tid: tid } }, '*');
+          });
         }
       }
     }
 
     return originalFetch.call(this, input, init).then(function(response) {
-      // Commit after successful project/post
-      if (pendingUsageToken && !commitInFlight && url && url.indexOf('project/post') !== -1 && response.ok) {
+      var rUrl = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+      if (pendingUsageToken && !commitInFlight && rUrl.indexOf('project/post') !== -1 && response && response.ok) {
         commitInFlight = true;
         var ct = pendingUsageToken;
         pendingUsageToken = null;
