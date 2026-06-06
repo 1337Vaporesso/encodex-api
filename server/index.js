@@ -105,7 +105,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 100 * 1024 * 1024 } // 100 MB hard limit
+  limits: { fileSize: 200 * 1024 * 1024 } // 200 MB hard limit
 });
 
 
@@ -331,8 +331,8 @@ async function checkAndResetUsage(userId) {
   if (user.last_daily_reset && user.last_daily_reset.toISOString().split('T')[0] !== todayStr) uploadsToday = 0;
   if (currentWeek !== lastWeek) uploadsThisWeek = 0;
   const limits = user.premium
-    ? { daily: 10, weekly: 50, maxSizeMB: 90 }
-    : { daily: 999, weekly: 3, maxSizeMB: 30 };
+    ? { daily: 10, weekly: 50, maxSizeMB: 200 }
+    : { daily: 999, weekly: 3, maxSizeMB: 200 };
   return { uploadsToday, uploadsThisWeek, limits, premium: user.premium };
 }
 
