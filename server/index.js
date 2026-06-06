@@ -503,11 +503,6 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     const videoBitrateK = Math.round(videoBitrate / 1000);
     console.log('[EncodeX] target', (videoBitrateK) + 'k video bitrate for', (duration || 60).toFixed(1), 's ->', TARGET_BYTES + 'B');
 
-    // Force 1080p: landscape→1920x1080, portrait→1080x1920, with padding for aspect ratio
-    const isLandscape = width > 0 && height > 0 ? (width >= height) : true;
-    const scaleTarget = isLandscape ? '1920:1080' : '1080:1920';
-    const scaleFilter = 'scale=' + scaleTarget + ':force_original_aspect_ratio=decrease,pad=' + scaleTarget + ':(ow-iw)/2:(oh-ih)/2';
-
     // 1-pass with 1.35x compensation factor for 24MB target
     const compBitrateK = Math.round(videoBitrateK * 1.35);
 
@@ -522,14 +517,13 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       '-profile:v', 'high',
       '-level', '4.2',
       '-threads', '2',
-      '-vf', scaleFilter,
       '-c:a', 'aac',
       '-b:a', '192k',
       '-movflags', '+faststart',
       '-max_muxing_queue_size', '1024',
       outputPath
     ];
-    console.log('[EncodeX] encode:', width + 'x' + height, '→', scaleTarget);
+    console.log('[EncodeX] encode:', width + 'x' + height, fps + 'fps', compBitrateK + 'kbit');
     try {
       await execFFmpeg(jobId, encodeArgs, duration);
     } catch (e1) {
