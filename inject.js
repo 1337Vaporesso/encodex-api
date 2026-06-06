@@ -230,34 +230,75 @@
     }
   });
 
-  // === INTERCEPT FETCH/XHR: 1) inject 1080p into create, 2) commit after project/post ===
+  // === INTERCEPT FETCH/XHR: inject 1080p into all TikTok API calls + commit tracking ===
+
+  // TikTok API URL patterns that might carry resolution data
+  var _tiktokApiPatterns = [
+    'create?', 'project/post', 'publish?', 'upload?', 'video/post', 'post/video',
+    'video/upload', 'v1/video', 'v2/video', 'api/v1/post', 'api/v2/post',
+    'api/v1/upload', 'api/v2/upload', 'post/create', 'video/create',
+    'post/publish', 'ai-queue/upscale', 'api/video'
+  ];
+
+  function _isTikTokApi(url) {
+    if (!url) return false;
+    for (var _i = 0; _i < _tiktokApiPatterns.length; _i++) {
+      if (url.indexOf(_tiktokApiPatterns[_i]) !== -1) return true;
+    }
+    return false;
+  }
+
   function patchBody1080p(bodyStr, urlHint) {
     if (!bodyStr || typeof bodyStr !== 'string') return bodyStr;
     try {
       var b = JSON.parse(bodyStr);
       var changed = false;
-      // Helper: set field(s) to value
+
       function set1080p(obj) {
         if (!obj || typeof obj !== 'object') return false;
         var c = false;
-        // width/height at any nesting level (top-level + internals)
-        if (obj.width !== undefined && (obj.width < 1080)) { obj.width = 1080; c = true; }
-        if (obj.height !== undefined && (obj.height < 1920)) { obj.height = 1920; c = true; }
-        // portrait/landscape detection
-        if (obj.width && obj.height && obj.width > obj.height) {
-          obj.width = 1920; obj.height = 1080;
-        }
-        // recurse into nested objects
+
+        // Aggressive field matching: ANY field containing width/height/resolution/quality
         for (var k in obj) {
-          if (obj[k] && typeof obj[k] === 'object') {
-            if (set1080p(obj[k])) c = true;
+          var v = obj[k];
+          // Recurse into nested objects first
+          if (v && typeof v === 'object') {
+            if (set1080p(v)) c = true;
           }
+          // Match dimension fields: width, height, w, h, source_width, original_width,
+          // video_width, res_width, thumb_width, max_width, etc.
+          if (typeof v === 'number' && v > 0) {
+            var kl = k.toLowerCase();
+            if ((kl.indexOf('width') !== -1 || kl === 'w') && v < 1080) {
+              obj[k] = 1080; c = true;
+            }
+            if ((kl.indexOf('height') !== -1 || kl === 'h') && v < 1920) {
+              obj[k] = 1920; c = true;
+            }
+          }
+          // Resolution string fields like "1080x1920" or "1080p"
+          if (typeof v === 'string') {
+            var kl = k.toLowerCase();
+            if ((kl.indexOf('resolution') !== -1 || kl.indexOf('quality') !== -1 || kl.indexOf('res') !== -1)
+                && v.indexOf('1080') === -1) {
+              if (obj.width > obj.height) obj[k] = '1080p';
+              else obj[k] = '1080p';
+              c = true;
+            }
+          }
+        }
+
+        // Portrait/landscape correction
+        if (obj.width && obj.height && obj.width > obj.height) {
+          if (obj.width !== 1920) { obj.width = 1920; c = true; }
+          if (obj.height !== 1080) { obj.height = 1080; c = true; }
         }
         return c;
       }
+
       changed = set1080p(b);
       if (changed) {
-        console.log('[EncodeX] patched body for', urlHint, JSON.stringify(b).substr(0, 500));
+        console.log('[EncodeX] patched body for', urlHint, JSON.stringify(b).substr(0, 600));
         return JSON.stringify(b);
       }
     } catch(e) { console.warn('[EncodeX] patchBody1080p error:', e); }
@@ -270,21 +311,31 @@
     var input = args[0];
     var init = args[1] || {};
     var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-    
-    // Inject 1080p into create/post requests
-    if (hqEnabled && url && (url.indexOf('create?') !== -1 || url.indexOf('project/post') !== -1)) {
-      if (typeof init.body === 'string') {
-        var patched = patchBody1080p(init.body, url);
-        if (patched !== init.body) {
-          init.body = patched;
+
+    if (hqEnabled && url) {
+      if (_isTikTokApi(url)) {
+        console.log('[EncodeX] fetch intercepted:', url.substr(0, 200));
+        // Try to parse and patch body
+        var body = init.body;
+        if (typeof body === 'string') {
+          var patched = patchBody1080p(body, url);
+          if (patched !== body) init.body = patched;
+        } else if (body && typeof body === 'object') {
+          // URLSearchParams or FormData
+          try {
+            var sp = body.toString ? body.toString() : '';
+            if (sp) {
+              var patched = patchBody1080p(sp, url);
+              if (patched !== sp) init.body = patched;
+            }
+          } catch(se) {}
         }
-      } else if (init.body && typeof init.body === 'object') {
-        console.log('[EncodeX] fetch body not string for', url, typeof init.body);
       }
     }
-    
+
     return originalFetch.call(this, input, init).then(function(response) {
-      if (pendingUsageToken && !commitInFlight && url.indexOf('project/post') !== -1 && response.ok) {
+      // Commit after successful project/post
+      if (pendingUsageToken && !commitInFlight && url && url.indexOf('project/post') !== -1 && response.ok) {
         commitInFlight = true;
         var ct = pendingUsageToken;
         pendingUsageToken = null;
@@ -298,19 +349,22 @@
   var origXHRSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function(method, url) {
     this._en_url = typeof url === 'string' ? url : (url ? url.toString() : '');
+    this._en_method = method;
     return origXHROpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.send = function(body) {
     var xhr = this;
     var url = xhr._en_url || '';
-    
-    // Inject 1080p into create/post requests
-    if (hqEnabled && url && (url.indexOf('create?') !== -1 || url.indexOf('project/post') !== -1)) {
-      if (typeof body === 'string') {
-        body = patchBody1080p(body, url);
+
+    if (hqEnabled && url) {
+      if (_isTikTokApi(url)) {
+        console.log('[EncodeX] XHR intercepted:', (xhr._en_method || 'GET'), url.substr(0, 200));
+        if (typeof body === 'string') {
+          body = patchBody1080p(body, url);
+        }
       }
     }
-    
+
     var origOnload = xhr.onload;
     xhr.onload = function() {
       if (pendingUsageToken && !commitInFlight && url.indexOf('project/post') !== -1 && xhr.status >= 200 && xhr.status < 300) {
@@ -323,6 +377,7 @@
     };
     return origXHRSend.call(xhr, body);
   };
+  console.log('[EncodeX] fetch/XHR interceptors active');
 
   // === LISTEN FOR STATE CHANGES ===
   window.addEventListener('EncodeXState', function(e) {

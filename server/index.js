@@ -505,6 +505,11 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
 
     // 1-pass with 1.35x compensation factor for 24MB target
     const compBitrateK = Math.round(videoBitrateK * 1.35);
+
+    // Force 1080p output via scale: landscape→1920x1080, portrait→1080x1920, pad to exact
+    const scaleFilter = "scale='if(gte(iw,ih),1920,1080)':'if(gte(iw,ih),1080,1920)':force_original_aspect_ratio=decrease," +
+      "pad='if(gte(iw,ih),1920,1080)':'if(gte(iw,ih),1080,1920)':(ow-iw)/2:(oh-ih)/2,setsar=1";
+
     const encodeArgs = [
       '-i', inputPath,
       '-c:v', 'libx264',
@@ -516,6 +521,7 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       '-profile:v', 'high',
       '-level', '4.2',
       '-threads', '2',
+      '-vf', scaleFilter,
       '-c:a', 'aac',
       '-b:a', '192k',
       '-movflags', '+faststart',
