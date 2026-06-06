@@ -258,37 +258,19 @@
         if (!obj || typeof obj !== 'object') return false;
         var c = false;
 
-        // Aggressive field matching: ANY field containing width/height/resolution/quality
+        // Precise field matching: exact width/height + known aliases
         for (var k in obj) {
           var v = obj[k];
-          // Recurse into nested objects first
           if (v && typeof v === 'object') {
             if (set1080p(v)) c = true;
           }
-          // Match dimension fields: width, height, w, h, source_width, original_width,
-          // video_width, res_width, thumb_width, max_width, etc.
           if (typeof v === 'number' && v > 0) {
-            var kl = k.toLowerCase();
-            if ((kl.indexOf('width') !== -1 || kl === 'w') && v < 1080) {
-              obj[k] = 1080; c = true;
-            }
-            if ((kl.indexOf('height') !== -1 || kl === 'h') && v < 1920) {
-              obj[k] = 1920; c = true;
-            }
-          }
-          // Resolution string fields like "1080x1920" or "1080p"
-          if (typeof v === 'string') {
-            var kl = k.toLowerCase();
-            if ((kl.indexOf('resolution') !== -1 || kl.indexOf('quality') !== -1 || kl.indexOf('res') !== -1)
-                && v.indexOf('1080') === -1) {
-              if (obj.width > obj.height) obj[k] = '1080p';
-              else obj[k] = '1080p';
-              c = true;
-            }
+            if (k === 'width' && v < 1080) { obj.width = 1080; c = true; }
+            if (k === 'height' && v < 1920) { obj.height = 1920; c = true; }
           }
         }
 
-        // Portrait/landscape correction
+        // Portrait/landscape correction: if width > height (landscape), force 1920x1080
         if (obj.width && obj.height && obj.width > obj.height) {
           if (obj.width !== 1920) { obj.width = 1920; c = true; }
           if (obj.height !== 1080) { obj.height = 1080; c = true; }
