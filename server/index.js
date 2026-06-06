@@ -533,8 +533,9 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       if (info.format && info.format.duration) duration = parseFloat(info.format.duration);
     } catch (e) { console.log('[EncodeX] ffprobe failed, using defaults fps=60'); }
 
-    console.log('[EncodeX] source:', (fps || '?') + 'fps', (duration || '?') + 's');
-    await pool.query('UPDATE jobs SET status = $1, progress = $2, duration = $3, analyzed_fps = $4 WHERE id = $5', [30, 30, duration, fps, jobId]);
+    console.log('[EncodeX] source:', (fps || '?') + 'fps', (duration || '?') + 's', 'jobId:', jobId);
+    const ra = await pool.query('UPDATE jobs SET status = $1, progress = $2, duration = $3, analyzed_fps = $4 WHERE id = $5 RETURNING id', [30, 30, duration, fps, jobId]);
+    if (!ra.rows.length) console.log('[EncodeX] DB: job not found for status 30!', jobId);
 
     // Проверяем что outputPath доступен для записи
     try { fs.writeFileSync(outputPath + '.test', 'ok'); fs.unlinkSync(outputPath + '.test'); } catch (we) {
@@ -552,9 +553,13 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       throw new Error('FFmpeg output missing');
     }
 
-    await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [40, 92, jobId]);
+    const r40 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [40, 92, jobId]);
+    if (!r40.rows.length) console.log('[EncodeX] DB: job not found for status 40!', jobId);
+    console.log('[EncodeX] job set to 40, file size:', fs.statSync(outputPath).size);
     await new Promise(r => setTimeout(r, 500));
-    await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [200, 100, jobId]);
+    const r200 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [200, 100, jobId]);
+    if (!r200.rows.length) console.log('[EncodeX] DB: job not found for status 200!', jobId);
+    else console.log('[EncodeX] job set to 200 done');
 
   } catch (e) {
     console.error('[EncodeX] pipeline error:', e.message);
@@ -569,6 +574,8 @@ app.get('/api/process/status', async (req, res) => {
     if (!jobId) return res.status(400).json({ ok: false, error: 'No job_id' });
     const r = await pool.query('SELECT status, progress, error FROM jobs WHERE id = $1', [jobId]);
     if (r.rows.length === 0) return res.status(404).json({ ok: false, error: 'Job not found' });
+    // Log every 10th second approx for debugging
+    if (r.rows[0].status !== 200) console.log('[EncodeX] status check:', jobId, 'status=' + r.rows[0].status);
     const job = r.rows[0];
     let resp = { ok: true, status: job.status };
     if (job.status === 30) resp.progress = job.progress;
@@ -583,12 +590,15 @@ app.get('/api/process/status', async (req, res) => {
 app.get('/api/process/result', async (req, res) => {
   try {
     const jobId = req.query.job_id;
+    console.log('[EncodeX] download requested:', jobId);
     if (!jobId) return res.status(400).json({ ok: false, error: 'No job_id' });
     const r = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
     if (r.rows.length === 0) return res.status(404).json({ ok: false, error: 'Job not found' });
     const job = r.rows[0];
-    if (job.status !== 200) return res.status(400).json({ ok: false, error: 'Job not ready' });
+    console.log('[EncodeX] download job status:', job.status);
+    if (job.status !== 200) return res.status(400).json({ ok: false, error: 'Job not ready status=' + job.status });
     if (!job.output_path) return res.status(400).json({ ok: false, error: 'No output file' });
+    console.log('[EncodeX] download sending file:', job.output_path);
 
     res.download(job.output_path, 'video.mp4', async function(err) {
       if (err) console.error('Download error:', err.message);
