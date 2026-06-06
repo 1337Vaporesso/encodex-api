@@ -93,7 +93,9 @@ async function init() {
 
 /* ===== Temp dir for uploads ===== */
 const TMP = process.env.TEMP_DIR || '/tmp/encodex';
-if (!fs.existsSync(TMP)) fs.mkdirSync(TMP, { recursive: true });
+const OUTPUT_DIR = process.env.OUTPUT_DIR || '/tmp/encodex_out';
+try { if (!fs.existsSync(TMP)) fs.mkdirSync(TMP, { recursive: true }); } catch (e) { console.error('[EncodeX] mkdir TMP:', e.message); }
+try { if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true }); } catch (e) { console.error('[EncodeX] mkdir OUTPUT_DIR:', e.message); }
 
 /* ===== Multer ===== */
 const storage = multer.diskStorage({
@@ -445,7 +447,7 @@ app.post('/api/process/upload', (req, res) => {
               return res.status(413).json({ ok: false, error: `Max ${limits.maxSizeMB} MB` });
             }
 
-            const outputPath = path.join(TMP, `processed_${jobRow.id}.mp4`);
+            const outputPath = path.join(OUTPUT_DIR, `processed_${jobRow.id}.mp4`);
             const inputPath = req.file.path;
 
             pool.query(
@@ -484,8 +486,10 @@ async function execFFmpeg(jobId, args, duration) {
     }
   }, 2000);
   proc.stderr.on('data', d => {
-    stderr += d.toString();
-    const m = d.toString().match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
+    const chunk = d.toString();
+    stderr += chunk;
+    console.log('[EncodeX] ffmpeg stderr:', chunk.substring(0, 500));
+    const m = chunk.match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
     if (m && duration > 0) {
       const s = parseInt(m[1])*3600 + parseInt(m[2])*60 + parseFloat(m[3]);
       pool.query('UPDATE jobs SET progress = $1 WHERE id = $2', [Math.round(Math.min(88, 30 + (s/duration)*58)), jobId]);
@@ -532,11 +536,20 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     console.log('[EncodeX] source:', (fps || '?') + 'fps', (duration || '?') + 's');
     await pool.query('UPDATE jobs SET status = $1, progress = $2, duration = $3, analyzed_fps = $4 WHERE id = $5', [30, 30, duration, fps, jobId]);
 
-    // Копируем файл без ре-энкода (FFmpeg c -c copy)
-    // Потом добавим FPS change если copy работает
+    // Проверяем что outputPath доступен для записи
+    try { fs.writeFileSync(outputPath + '.test', 'ok'); fs.unlinkSync(outputPath + '.test'); } catch (we) {
+      console.error('[EncodeX] output dir not writable:', we.message);
+      await pool.query('UPDATE jobs SET status = $1, error = $2 WHERE id = $3', [500, 'Output dir not writable: ' + we.message, jobId]);
+      return;
+    }
     console.log('[EncodeX] copying:', fps + 'fps -> output');
     const remuxArgs = ['-y', '-i', inputPath, '-c', 'copy', outputPath];
     await execFFmpeg(jobId, remuxArgs, duration);
+    // Проверяем что файл создан
+    if (!fs.existsSync(outputPath)) {
+      console.error('[EncodeX] FFmpeg exit 0 but output not found:', outputPath);
+      throw new Error('FFmpeg reported success but output file missing');
+    }
 
     await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3', [40, 92, jobId]);
     await new Promise(r => setTimeout(r, 500));
