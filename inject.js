@@ -19,18 +19,28 @@
   if (!window._enx_urlPatched) {
     window._enx_urlPatched = true;
     var _origCreateURL = URL.createObjectURL;
+    var _origRevokeURL = URL.revokeObjectURL;
     var _fake1080pUrl = null;
     var _fake1080pBlob = null;
-    try {
-      var _b64 = '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';
-      var _bin = atob(_b64);
-      var _buf = new Uint8Array(_bin.length);
-      for (var _i = 0; _i < _bin.length; _i++) _buf[_i] = _bin.charCodeAt(_i);
-      _fake1080pBlob = new Blob([_buf], { type: 'video/mp4' });
-      _fake1080pUrl = _origCreateURL.call(URL, _fake1080pBlob);
-    } catch(_e) { console.warn('[EncodeX] fake blob init:', _e); }
+    function _makeFakeBlob() {
+      try {
+        var _b64 = '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';
+        var _bin = atob(_b64);
+        var _buf = new Uint8Array(_bin.length);
+        for (var _i = 0; _i < _bin.length; _i++) _buf[_i] = _bin.charCodeAt(_i);
+        _fake1080pBlob = new Blob([_buf], { type: 'video/mp4' });
+        _fake1080pUrl = _origCreateURL.call(URL, _fake1080pBlob);
+      } catch(_e) { console.warn('[EncodeX] fake blob init:', _e); }
+    }
+    _makeFakeBlob();
+    // Protect our fake URL from being revoked by TikTok
+    URL.revokeObjectURL = function(url) {
+      if (url === _fake1080pUrl) return;
+      return _origRevokeURL.call(URL, url);
+    };
     URL.createObjectURL = function(obj) {
       if (hqEnabled && obj instanceof Blob && obj.type && obj.type.indexOf('video/') === 0) {
+        if (!_fake1080pUrl) _makeFakeBlob();
         if (_fake1080pUrl) return _fake1080pUrl;
       }
       return _origCreateURL.call(URL, obj);
@@ -221,20 +231,36 @@
   });
 
   // === INTERCEPT FETCH/XHR: 1) inject 1080p into create, 2) commit after project/post ===
-  function patchBody1080p(bodyStr) {
+  function patchBody1080p(bodyStr, urlHint) {
     if (!bodyStr || typeof bodyStr !== 'string') return bodyStr;
     try {
       var b = JSON.parse(bodyStr);
       var changed = false;
-      // Set 1080p resolution fields for TikTok API
-      if (!b.width || b.width < 1080) { b.width = 1080; changed = true; }
-      if (!b.height || b.height < 1920) { b.height = 1920; changed = true; }
-      // Portrait mode check (if height < width, swap)
-      if (b.width && b.height && b.width > b.height) {
-        b.width = 1920; b.height = 1080;
+      // Helper: set field(s) to value
+      function set1080p(obj) {
+        if (!obj || typeof obj !== 'object') return false;
+        var c = false;
+        // width/height at any nesting level (top-level + internals)
+        if (obj.width !== undefined && (obj.width < 1080)) { obj.width = 1080; c = true; }
+        if (obj.height !== undefined && (obj.height < 1920)) { obj.height = 1920; c = true; }
+        // portrait/landscape detection
+        if (obj.width && obj.height && obj.width > obj.height) {
+          obj.width = 1920; obj.height = 1080;
+        }
+        // recurse into nested objects
+        for (var k in obj) {
+          if (obj[k] && typeof obj[k] === 'object') {
+            if (set1080p(obj[k])) c = true;
+          }
+        }
+        return c;
       }
-      if (changed) return JSON.stringify(b);
-    } catch(e) {}
+      changed = set1080p(b);
+      if (changed) {
+        console.log('[EncodeX] patched body for', urlHint, JSON.stringify(b).substr(0, 500));
+        return JSON.stringify(b);
+      }
+    } catch(e) { console.warn('[EncodeX] patchBody1080p error:', e); }
     return bodyStr;
   }
 
@@ -247,18 +273,18 @@
     
     // Inject 1080p into create/post requests
     if (hqEnabled && url && (url.indexOf('create?') !== -1 || url.indexOf('project/post') !== -1)) {
-      var body = init.body || '';
-      if (typeof body === 'string') {
-        var patched = patchBody1080p(body);
-        if (patched !== body) {
-          if (args[1]) args[1].body = patched;
-          else { args[0] = new Request(input, { body: patched, method: init.method }); }
+      if (typeof init.body === 'string') {
+        var patched = patchBody1080p(init.body, url);
+        if (patched !== init.body) {
+          init.body = patched;
         }
+      } else if (init.body && typeof init.body === 'object') {
+        console.log('[EncodeX] fetch body not string for', url, typeof init.body);
       }
     }
     
-    return originalFetch.apply(this, args).then(function(response) {
-      if (pendingUsageToken && !commitInFlight && url && url.indexOf('project/post') !== -1 && response.ok) {
+    return originalFetch.call(this, input, init).then(function(response) {
+      if (pendingUsageToken && !commitInFlight && url.indexOf('project/post') !== -1 && response.ok) {
         commitInFlight = true;
         var ct = pendingUsageToken;
         pendingUsageToken = null;
@@ -280,7 +306,9 @@
     
     // Inject 1080p into create/post requests
     if (hqEnabled && url && (url.indexOf('create?') !== -1 || url.indexOf('project/post') !== -1)) {
-      body = patchBody1080p(body);
+      if (typeof body === 'string') {
+        body = patchBody1080p(body, url);
+      }
     }
     
     var origOnload = xhr.onload;
