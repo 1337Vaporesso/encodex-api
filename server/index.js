@@ -28,17 +28,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-async function init(retries = 10) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      await pool.query(`SELECT 1`);
-      break;
-    } catch (e) {
-      if (i === retries - 1) throw e;
-      console.log(`[DB] Waiting for database (attempt ${i + 1}/${retries})...`);
-      await new Promise(r => setTimeout(r, 3000));
-    }
-  }
+async function init() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -579,11 +569,8 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
 
     const r40 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [40, 92, jobId]);
     if (!r40.rows.length) console.log('[EncodeX] DB: job not found for status 40!', jobId);
-    let fileSize = 0;
-    try { fileSize = fs.statSync(outputPath).size; } catch (e) { console.error('[EncodeX] stat failed at status 40:', e.message); }
-    console.log('[EncodeX] job set to 40, file size:', fileSize);
+    console.log('[EncodeX] job set to 40, file size:', fs.statSync(outputPath).size);
     await new Promise(r => setTimeout(r, 500));
-    try { fs.unlink(inputPath, () => {}); } catch (e) {}
     const r200 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [200, 100, jobId]);
     if (!r200.rows.length) console.log('[EncodeX] DB: job not found for status 200!', jobId);
     else console.log('[EncodeX] job set to 200 done');
