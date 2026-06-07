@@ -511,20 +511,7 @@ async function execFFmpeg(jobId, args, duration) {
   });
 }
 
-function injectViddenBox(mp4Path) {
-  const data = fs.readFileSync(mp4Path);
-  // Inject at END of file (не ломает оффсеты внутри moov)
-  const payload = Buffer.alloc(24);
-  payload.writeUInt32BE(0, 0);
-  payload.write('vidden', 4, 'ascii');
-  const boxSize = 8 + payload.length;
-  const header = Buffer.alloc(8);
-  header.writeUInt32BE(boxSize, 0);
-  header.write('uuid', 4, 'ascii');
-  const patched = Buffer.concat([data, header, payload]);
-  fs.writeFileSync(mp4Path, patched);
-  console.log('[EncodeX] _vidden box injected at end, size before:', data.length, 'after:', patched.length);
-}
+
 
 async function runFFmpegPipeline(jobId, inputPath, outputPath) {
   try {
@@ -559,19 +546,14 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     // -itsscale 2 как в bat: меняет PTS → 60fps→30fps → TikTok не ресайзит
     const itsscale = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1));
     console.log('[EncodeX] remux: -itsscale', itsscale, fps + 'fps -> ~' + Math.round(fps / Math.max(1, itsscale)) + 'fps');
-    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', '-map_metadata', '-1', outputPath];
+    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', outputPath];
     await execFFmpeg(jobId, remuxArgs, duration);
     if (!fs.existsSync(outputPath)) {
       console.error('[EncodeX] FFmpeg exit 0 but output not found:', outputPath);
       throw new Error('FFmpeg output missing');
     }
 
-    // Hex-patch: inject _vidden proprietary box (TikTok маркер "уже обработано")
-    try {
-      injectViddenBox(outputPath);
-    } catch (patchErr) {
-      console.log('[EncodeX] _vidden patch skipped:', patchErr.message);
-    }
+    console.log('[EncodeX] ffmpeg done, size:', fs.statSync(outputPath).size);
 
     const r40 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [40, 92, jobId]);
     if (!r40.rows.length) console.log('[EncodeX] DB: job not found for status 40!', jobId);
