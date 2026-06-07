@@ -111,149 +111,6 @@
     window.postMessage({ source: 'encodex-inject', type: type, payload: payload }, '*');
   }
 
-  function injectFileIntoForm(file) {
-    if (pendingInput) {
-      var dt = new DataTransfer();
-      dt.items.add(file);
-      pendingInput.files = dt.files;
-      processing = false;
-      updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
-      reentryGuard = true;
-      var inp = pendingInput;
-      pendingInput = null; pendingDropTarget = null;
-      setTimeout(function() {
-        removeOverlay();
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
-      }, 1000);
-    } else if (pendingDropTarget) {
-      var w = new DataTransfer();
-      w.items.add(file);
-      processing = false;
-      updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
-      reentryGuard = true;
-      var tgt = pendingDropTarget;
-      pendingInput = null; pendingDropTarget = null;
-      setTimeout(function() {
-        removeOverlay();
-        tgt.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: w }));
-      }, 1000);
-    } else {
-      processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
-    }
-  }
-
-  // === LOCAL MP4 PROCESSING (no server needed) ===
-  function _r32(d,o) { return (d[o]<<24)|(d[o+1]<<16)|(d[o+2]<<8)|d[o+3]; }
-  function _w32(d,o,v) { d[o]=(v>>24)&255; d[o+1]=(v>>16)&255; d[o+2]=(v>>8)&255; d[o+3]=v&255; }
-
-  // Iterative depth-first box search (no recursion)
-  function _findBox(d, type, start, end) {
-    start = start || 0; end = end || d.length;
-    var stack = [{ s: start, e: end }];
-    while (stack.length > 0) {
-      var r = stack.pop();
-      var i = r.s;
-      while (i < r.e - 8) {
-        var sz = _r32(d, i);
-        if (sz < 8) sz = 8;
-        var boxEnd = i + sz;
-        if (boxEnd > r.e) boxEnd = r.e;
-        var t = String.fromCharCode(d[i+4],d[i+5],d[i+6],d[i+7]);
-        if (t === type) return { s: i, z: boxEnd - i, e: boxEnd };
-        if (t !== 'mdat' && t !== 'free' && boxEnd > i + 8) {
-          if (boxEnd < r.e) stack.push({ s: boxEnd, e: r.e });
-          stack.push({ s: i + 8, e: boxEnd });
-          break;
-        }
-        i = boxEnd;
-      }
-    }
-    return null;
-  }
-
-  // Iterative: find ALL stco boxes and apply a function to each
-  function _adjustStco(d, start, end, delta) {
-    var pos = start;
-    while (pos < end - 8) {
-      var b = _findBox(d, 'stco', pos, end);
-      if (!b) break;
-      var cnt = _r32(d, b.s + 12);
-      for (var j = 0; j < cnt; j++) {
-        var off = b.s + 16 + j * 4;
-        _w32(d, off, _r32(d, off) + delta);
-      }
-      pos = b.e;
-    }
-  }
-
-  function processLocally(file) {
-    return new Promise(function(resolve, reject) {
-      var reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          var buf = e.target.result;
-          var d = new Uint8Array(buf);
-          var moov = _findBox(d, 'moov');
-          if (!moov) return reject(new Error('no moov'));
-
-          // Walk tracks to find video mdhd
-          var changed = false, its = 1;
-          var ti = moov.s + 8;
-          while (ti < moov.e - 8) {
-            var trak = _findBox(d, 'trak', ti, moov.e);
-            if (!trak) break;
-            var mdia = _findBox(d, 'mdia', trak.s + 8, trak.e);
-            if (mdia) {
-              var hdlr = _findBox(d, 'hdlr', mdia.s + 8, mdia.e);
-              if (hdlr && String.fromCharCode(d[hdlr.s+12],d[hdlr.s+13],d[hdlr.s+14],d[hdlr.s+15]) === 'vide') {
-                var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
-                if (mdhd) {
-                  var ver = d[mdhd.s + 8];
-                  var tsOff = mdhd.s + 12;
-                  if (ver === 1) tsOff += 16; else tsOff += 8;
-                  var ts = _r32(d, tsOff);
-                  // Get fps from stts
-                  var stbl = _findBox(d, 'stbl', mdia.s + 8, mdia.e);
-                  if (stbl) {
-                    var stts = _findBox(d, 'stts', stbl.s + 8, stbl.e);
-                    if (stts) {
-                      var cnt = _r32(d, stts.s + 12);
-                      if (cnt > 0) {
-                        var sd = _r32(d, stts.s + 20);
-                        if (sd > 0) { var fps = Math.round(ts / sd); its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1)); }
-                      }
-                    }
-                  }
-                  if (its > 1) { _w32(d, tsOff, Math.max(1, Math.round(ts / its))); changed = true; break; }
-                }
-              }
-            }
-            ti = trak.e;
-          }
-          if (!changed) return resolve(file);
-
-          // faststart: move moov right after ftyp
-          var ftyp = _findBox(d, 'ftyp');
-          var insertAt = ftyp ? ftyp.s + ftyp.z : 0;
-          if (insertAt === moov.s) return resolve(new File([buf], file.name, { type: file.type, lastModified: Date.now() }));
-
-          var mdat = _findBox(d, 'mdat');
-          var delta = (mdat && mdat.s >= moov.e) ? 0 : moov.z;
-          var pre = insertAt, mid = moov.s - insertAt, moovLen = moov.z, post = buf.byteLength - moov.e;
-          var out = new Uint8Array(pre + moovLen + mid + post);
-          if (pre > 0) out.set(new Uint8Array(buf, 0, pre), 0);
-          out.set(new Uint8Array(buf, moov.s, moovLen), pre);
-          if (delta !== 0) _adjustStco(out, pre + 8, pre + moovLen, delta);
-          if (mid > 0) out.set(new Uint8Array(buf, insertAt, mid), pre + moovLen);
-          if (post > 0) out.set(new Uint8Array(buf, moov.e, post), pre + moovLen + mid);
-          resolve(new File([out.buffer], file.name, { type: file.type, lastModified: Date.now() }));
-        } catch(err) { reject(err); }
-      };
-      reader.onerror = reject;
-      reader.readAsArrayBuffer(file);
-    });
-  }
-
   // === INTERCEPT FILE CHANGE ===
   window.addEventListener('change', function(e) {
     var input = e.target;
@@ -276,12 +133,7 @@
     pendingFileName = file.name;
     pendingFileType = file.type;
     showOverlay(file);
-    processLocally(file).then(function(newFile) {
-      injectFileIntoForm(newFile);
-    }).catch(function(err) {
-      console.warn('[EncodeX] Local process failed, fallback to server:', err);
-      postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type });
-    });
+    postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type });
   }, true);
 
   // === INTERCEPT DRAG-AND-DROP ===
@@ -307,12 +159,7 @@
     pendingFileName = file.name;
     pendingFileType = file.type;
     showOverlay(file);
-    processLocally(file).then(function(newFile) {
-      injectFileIntoForm(newFile);
-    }).catch(function(err) {
-      console.warn('[EncodeX] Local process failed, fallback to server:', err);
-      postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type, isDrop: true });
-    });
+    postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type, isDrop: true });
   }, true);
 
   // === LISTEN FOR RESPONSES FROM content.js ===
@@ -369,6 +216,10 @@
           processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
           alert('EncodeX: ' + (p.error || 'Processing failed'));
         }
+        break;
+
+      case 'DOWNLOAD_PROGRESS':
+        updateOverlay(p.label, p.percent);
         break;
 
       case 'DOWNLOAD_RESULT':

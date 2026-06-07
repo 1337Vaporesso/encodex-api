@@ -497,7 +497,9 @@ window.addEventListener('message', function(event) {
       xhr.upload.onprogress = function(e) {
         if (e.lengthComputable) {
           var pct = Math.round((e.loaded / e.total) * 100 * 0.16 + 2);
-          var label = (window._encodex_currentLang === 'ru' ? 'Загрузка' : 'Uploading') + ' (' + pct + '%)';
+          var loadedMB = (e.loaded / 1048576).toFixed(1);
+          var totalMB = (e.total / 1048576).toFixed(1);
+          var label = (window._encodex_currentLang === 'ru' ? 'Загрузка' : 'Uploading') + ' ' + loadedMB + '/' + totalMB + ' MB (' + pct + '%)';
           respond('UPLOAD_PROGRESS', { percent: pct, label: label });
         }
       };
@@ -555,21 +557,37 @@ window.addEventListener('message', function(event) {
 
     case 'DOWNLOAD': {
       var url = payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken;
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', url);
-      xhr.responseType = 'arraybuffer';
-      xhr.timeout = 300000;
-      xhr.onprogress = function(e) {
-        if (e.lengthComputable) respond('DOWNLOAD_PROGRESS', { label: 'Downloading...', percent: 80 + Math.round(e.loaded / e.total * 15) });
-      };
-      xhr.onload = function() {
-        if (xhr.status !== 200) return respond('DOWNLOAD_RESULT', { ok: false, error: 'HTTP ' + xhr.status });
-        var blob = new Blob([xhr.response], { type: 'video/mp4' });
-        respond('DOWNLOAD_RESULT', { ok: true, buffer: blob, _usageToken: payload.usageToken });
-      };
-      xhr.onerror = function() { respond('DOWNLOAD_RESULT', { ok: false, error: 'Network error' }); };
-      xhr.ontimeout = function() { respond('DOWNLOAD_RESULT', { ok: false, error: 'Timeout' }); };
-      xhr.send();
+      (function attempt(retries) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url);
+        xhr.responseType = 'arraybuffer';
+        xhr.timeout = 600000;
+        xhr.onprogress = function(e) {
+          if (e.lengthComputable) {
+            var pct = 80 + Math.round(e.loaded / e.total * 15);
+            var loadedMB = (e.loaded / 1048576).toFixed(1);
+            var totalMB = (e.total / 1048576).toFixed(1);
+            respond('DOWNLOAD_PROGRESS', { label: 'Download ' + loadedMB + '/' + totalMB + ' MB (' + pct + '%)', percent: pct });
+          }
+        };
+        xhr.onload = function() {
+          if (xhr.status !== 200) {
+            if (retries < 5) { setTimeout(function() { attempt(retries + 1); }, Math.min(30000, 2000 * Math.pow(2, retries))); return; }
+            return respond('DOWNLOAD_RESULT', { ok: false, error: 'HTTP ' + xhr.status });
+          }
+          var blob = new Blob([xhr.response], { type: 'video/mp4' });
+          respond('DOWNLOAD_RESULT', { ok: true, buffer: blob, _usageToken: payload.usageToken });
+        };
+        xhr.onerror = function() {
+          if (retries < 5) { setTimeout(function() { attempt(retries + 1); }, Math.min(30000, 2000 * Math.pow(2, retries))); return; }
+          respond('DOWNLOAD_RESULT', { ok: false, error: 'Network error' });
+        };
+        xhr.ontimeout = function() {
+          if (retries < 5) { setTimeout(function() { attempt(retries + 1); }, Math.min(30000, 2000 * Math.pow(2, retries))); return; }
+          respond('DOWNLOAD_RESULT', { ok: false, error: 'Timeout' });
+        };
+        xhr.send();
+      })(0);
       break;
     }
 
