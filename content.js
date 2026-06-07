@@ -554,37 +554,57 @@ window.addEventListener('message', function(event) {
     }
 
     case 'DOWNLOAD': {
-      (function download(retries) {
-        var url = payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken;
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', url);
-        xhr.responseType = 'arraybuffer';
-        xhr.timeout = 180000;
-        xhr.onprogress = function(e) {
-          if (e.lengthComputable)
-            respond('DOWNLOAD_PROGRESS', { label: 'Downloading...', percent: 80 + Math.round(e.loaded / e.total * 15) });
-        };
-        xhr.onload = function() {
-          if (xhr.status !== 200) {
-            if (retries < 5) { setTimeout(function() { download(retries + 1); }, 3000 * (retries + 1)); return; }
-            return respond('DOWNLOAD_RESULT', { ok: false, error: 'HTTP ' + xhr.status });
-          }
-          var blob = new Blob([xhr.response], { type: 'video/mp4' });
-          console.log('[EncodeX] download complete:', blob.size, 'bytes');
-          respond('DOWNLOAD_RESULT', { ok: true, buffer: blob, _usageToken: payload.usageToken });
-        };
-        xhr.onerror = function() {
-          console.error('[EncodeX] download error:', xhr.status, xhr.statusText);
-          if (retries < 5) { setTimeout(function() { download(retries + 1); }, 3000 * (retries + 1)); return; }
-          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download failed' });
-        };
-        xhr.ontimeout = function() {
-          console.error('[EncodeX] download timeout');
-          if (retries < 5) { setTimeout(function() { download(retries + 1); }, 3000 * (retries + 1)); return; }
-          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download timeout' });
-        };
-        xhr.send();
-      })(0);
+      var url = payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken;
+      (function attempt(retries, useSW) {
+        if (useSW) {
+          var port = chrome.runtime.connect({ name: 'dl-' + Date.now() });
+          var chunks = [];
+          var timer = setTimeout(function() {
+            console.error('[EncodeX] SW silent, fallback to XHR');
+            attempt(retries, false);
+          }, 8000);
+          port.onMessage.addListener(function(msg) {
+            if (msg.type === 'chunk') { chunks.push(msg.data); }
+            else if (msg.type === 'done') {
+              clearTimeout(timer);
+              console.log('[EncodeX] download via SW:', msg.totalSize, 'bytes');
+              respond('DOWNLOAD_RESULT', { ok: true, buffer: new Blob(chunks, { type: 'video/mp4' }), _usageToken: payload.usageToken });
+            }
+            else if (msg.type === 'error') {
+              clearTimeout(timer);
+              console.error('[EncodeX] SW error:', msg.error);
+              attempt(retries, false);
+            }
+          });
+          port.postMessage({ action: 'DOWNLOAD_CHUNKED', url: url });
+        } else {
+          var xhr = new XMLHttpRequest();
+          xhr.open('GET', url);
+          xhr.responseType = 'arraybuffer';
+          xhr.timeout = 300000;
+          xhr.onprogress = function(e) {
+            if (e.lengthComputable) respond('DOWNLOAD_PROGRESS', { label: 'Downloading...', percent: 80 + Math.round(e.loaded / e.total * 15) });
+          };
+          xhr.onload = function() {
+            if (xhr.status !== 200) {
+              if (retries < 3) { setTimeout(function() { attempt(retries + 1, true); }, 2000); return; }
+              return respond('DOWNLOAD_RESULT', { ok: false, error: 'HTTP ' + xhr.status });
+            }
+            var blob = new Blob([xhr.response], { type: 'video/mp4' });
+            respond('DOWNLOAD_RESULT', { ok: true, buffer: blob, _usageToken: payload.usageToken });
+          };
+          xhr.onerror = function() {
+            console.error('[EncodeX] XHR error');
+            if (retries < 3) { setTimeout(function() { attempt(retries + 1, true); }, 3000); return; }
+            respond('DOWNLOAD_RESULT', { ok: false, error: 'Network error' });
+          };
+          xhr.ontimeout = function() {
+            if (retries < 3) { setTimeout(function() { attempt(retries + 1, true); }, 5000); return; }
+            respond('DOWNLOAD_RESULT', { ok: false, error: 'Timeout' });
+          };
+          xhr.send();
+        }
+      })(0, true);
       break;
     }
 
