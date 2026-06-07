@@ -644,10 +644,9 @@ app.get('/api/process/result', async (req, res) => {
 
     res.download(job.output_path, 'video.mp4', async function(err) {
       if (err) console.error('Download error:', err.message);
-      // Clean up tokens immediately (не блокирует повторную скачку)
-      await pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
-      // Удаляем файлы через 30 мин (чтобы ретраи клиента успели)
+      // Удаляем токены и файлы через 30 мин (ретраи клиента могут быть多次)
       setTimeout(() => {
+        pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
         if (job.input_path) fs.unlink(job.input_path, () => {});
         if (job.output_path) fs.unlink(job.output_path, () => {});
         pool.query('DELETE FROM jobs WHERE id = $1', [jobId]).catch(() => {});
