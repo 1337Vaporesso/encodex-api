@@ -111,6 +111,132 @@
     window.postMessage({ source: 'encodex-inject', type: type, payload: payload }, '*');
   }
 
+  function injectFileIntoForm(file) {
+    if (pendingInput) {
+      var dt = new DataTransfer();
+      dt.items.add(file);
+      pendingInput.files = dt.files;
+      processing = false;
+      updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
+      reentryGuard = true;
+      var inp = pendingInput;
+      pendingInput = null; pendingDropTarget = null;
+      setTimeout(function() {
+        removeOverlay();
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+      }, 1000);
+    } else if (pendingDropTarget) {
+      var w = new DataTransfer();
+      w.items.add(file);
+      processing = false;
+      updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
+      reentryGuard = true;
+      var tgt = pendingDropTarget;
+      pendingInput = null; pendingDropTarget = null;
+      setTimeout(function() {
+        removeOverlay();
+        tgt.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: w }));
+      }, 1000);
+    } else {
+      processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
+    }
+  }
+
+  // === LOCAL MP4 PROCESSING (no server needed) ===
+  function _r32(d,o) { return (d[o]<<24)|(d[o+1]<<16)|(d[o+2]<<8)|d[o+3]; }
+  function _w32(d,o,v) { d[o]=(v>>24)&255; d[o+1]=(v>>16)&255; d[o+2]=(v>>8)&255; d[o+3]=v&255; }
+
+  function _findBox(d, type, start, end) {
+    start = start || 0; end = end || d.length;
+    var i = start;
+    while (i < end - 8) {
+      var sz = _r32(d, i);
+      if (sz === 0) sz = end - i;
+      var t = String.fromCharCode(d[i+4],d[i+5],d[i+6],d[i+7]);
+      if (t === type) return { s: i, z: sz, e: i + sz };
+      if (t !== 'mdat' && sz > 8) { var inner = _findBox(d, type, i+8, i+sz); if (inner) return inner; }
+      i += sz;
+    }
+    return null;
+  }
+
+  function _forEachBox(d, type, start, end, fn) {
+    start = start || 0; end = end || d.length;
+    var i = start;
+    while (i < end - 8) {
+      var sz = _r32(d, i);
+      if (sz === 0) sz = end - i;
+      var t = String.fromCharCode(d[i+4],d[i+5],d[i+6],d[i+7]);
+      if (t === type) fn({ s: i, z: sz, e: i + sz });
+      if (t !== 'mdat' && sz > 8) _forEachBox(d, type, i+8, i+sz, fn);
+      i += sz;
+    }
+  }
+
+  function processLocally(file) {
+    return new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var buf = e.target.result;
+          var d = new Uint8Array(buf);
+          var moov = _findBox(d, 'moov');
+          if (!moov) return reject(new Error('no moov'));
+
+          var changed = false, its = 1;
+          _forEachBox(d, 'mdhd', moov.s + 8, moov.e, function(box) {
+            if (changed) return;
+            var ver = d[box.s + 8];
+            var tsOff = box.s + 12;
+            if (ver === 1) tsOff += 16; else tsOff += 8;
+            var ts = _r32(d, tsOff);
+            // Check if this mdhd belongs to a video track
+            var scan = box.s;
+            while (scan > moov.s && !(d[scan+4]===109&&d[scan+5]===100&&d[scan+6]===105&&d[scan+7]===97)) scan--;
+            if (scan <= moov.s) return;
+            var hdlr = _findBox(d, 'hdlr', scan+8, scan+_r32(d, scan));
+            if (!hdlr) return;
+            if (String.fromCharCode(d[hdlr.s+12],d[hdlr.s+13],d[hdlr.s+14],d[hdlr.s+15]) !== 'vide') return;
+            // Get fps from stts in same track
+            var stts = _findBox(d, 'stts', scan+8, scan+_r32(d, scan));
+            if (stts) {
+              var cnt = _r32(d, stts.s + 12);
+              if (cnt > 0) {
+                var sd = _r32(d, stts.s + 20);
+                if (sd > 0) { var fps = Math.round(ts / sd); its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1)); }
+              }
+            }
+            if (its > 1) { _w32(d, tsOff, Math.max(1, Math.round(ts / its))); changed = true; }
+          });
+          if (!changed) return resolve(file);
+
+          // faststart: move moov right after ftyp
+          var ftyp = _findBox(d, 'ftyp');
+          var insertAt = ftyp ? ftyp.s + ftyp.z : 0;
+          if (insertAt === moov.s) return resolve(new File([buf], file.name, { type: file.type, lastModified: Date.now() }));
+
+          var mdat = _findBox(d, 'mdat');
+          var delta = (mdat && mdat.s >= moov.e) ? 0 : moov.z;
+          var pre = insertAt, mid = moov.s - insertAt, moovLen = moov.z, post = buf.byteLength - moov.e;
+          var out = new Uint8Array(pre + moovLen + mid + post);
+          if (pre > 0) out.set(new Uint8Array(buf, 0, pre), 0);
+          out.set(new Uint8Array(buf, moov.s, moovLen), pre);
+          if (delta !== 0) {
+            _forEachBox(out, 'stco', pre + 8, pre + moovLen, function(b) {
+              var cnt = _r32(out, b.s + 12);
+              for (var j = 0; j < cnt; j++) { var off = b.s + 16 + j*4; _w32(out, off, _r32(out, off) + delta); }
+            });
+          }
+          if (mid > 0) out.set(new Uint8Array(buf, insertAt, mid), pre + moovLen);
+          if (post > 0) out.set(new Uint8Array(buf, moov.e, post), pre + moovLen + mid);
+          resolve(new File([out.buffer], file.name, { type: file.type, lastModified: Date.now() }));
+        } catch(err) { reject(err); }
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
   // === INTERCEPT FILE CHANGE ===
   window.addEventListener('change', function(e) {
     var input = e.target;
@@ -133,7 +259,12 @@
     pendingFileName = file.name;
     pendingFileType = file.type;
     showOverlay(file);
-    postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type });
+    processLocally(file).then(function(newFile) {
+      injectFileIntoForm(newFile);
+    }).catch(function(err) {
+      console.warn('[EncodeX] Local process failed, fallback to server:', err);
+      postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type });
+    });
   }, true);
 
   // === INTERCEPT DRAG-AND-DROP ===
@@ -159,7 +290,12 @@
     pendingFileName = file.name;
     pendingFileType = file.type;
     showOverlay(file);
-    postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type, isDrop: true });
+    processLocally(file).then(function(newFile) {
+      injectFileIntoForm(newFile);
+    }).catch(function(err) {
+      console.warn('[EncodeX] Local process failed, fallback to server:', err);
+      postMsg('ALLOCATE', { fileSize: file.size, _file: file, fileName: file.name, fileType: file.type, isDrop: true });
+    });
   }, true);
 
   // === LISTEN FOR RESPONSES FROM content.js ===
