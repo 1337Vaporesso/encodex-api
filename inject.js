@@ -146,30 +146,43 @@
   function _r32(d,o) { return (d[o]<<24)|(d[o+1]<<16)|(d[o+2]<<8)|d[o+3]; }
   function _w32(d,o,v) { d[o]=(v>>24)&255; d[o+1]=(v>>16)&255; d[o+2]=(v>>8)&255; d[o+3]=v&255; }
 
+  // Iterative depth-first box search (no recursion)
   function _findBox(d, type, start, end) {
     start = start || 0; end = end || d.length;
-    var i = start;
-    while (i < end - 8) {
-      var sz = _r32(d, i);
-      if (sz === 0) sz = end - i;
-      var t = String.fromCharCode(d[i+4],d[i+5],d[i+6],d[i+7]);
-      if (t === type) return { s: i, z: sz, e: i + sz };
-      if (t !== 'mdat' && sz > 8) { var inner = _findBox(d, type, i+8, i+sz); if (inner) return inner; }
-      i += sz;
+    var stack = [{ s: start, e: end }];
+    while (stack.length > 0) {
+      var r = stack.pop();
+      var i = r.s;
+      while (i < r.e - 8) {
+        var sz = _r32(d, i);
+        if (sz < 8) sz = 8;
+        var boxEnd = i + sz;
+        if (boxEnd > r.e) boxEnd = r.e;
+        var t = String.fromCharCode(d[i+4],d[i+5],d[i+6],d[i+7]);
+        if (t === type) return { s: i, z: boxEnd - i, e: boxEnd };
+        if (t !== 'mdat' && t !== 'free' && boxEnd > i + 8) {
+          if (boxEnd < r.e) stack.push({ s: boxEnd, e: r.e });
+          stack.push({ s: i + 8, e: boxEnd });
+          break;
+        }
+        i = boxEnd;
+      }
     }
     return null;
   }
 
-  function _forEachBox(d, type, start, end, fn) {
-    start = start || 0; end = end || d.length;
-    var i = start;
-    while (i < end - 8) {
-      var sz = _r32(d, i);
-      if (sz === 0) sz = end - i;
-      var t = String.fromCharCode(d[i+4],d[i+5],d[i+6],d[i+7]);
-      if (t === type) fn({ s: i, z: sz, e: i + sz });
-      if (t !== 'mdat' && sz > 8) _forEachBox(d, type, i+8, i+sz, fn);
-      i += sz;
+  // Iterative: find ALL stco boxes and apply a function to each
+  function _adjustStco(d, start, end, delta) {
+    var pos = start;
+    while (pos < end - 8) {
+      var b = _findBox(d, 'stco', pos, end);
+      if (!b) break;
+      var cnt = _r32(d, b.s + 12);
+      for (var j = 0; j < cnt; j++) {
+        var off = b.s + 16 + j * 4;
+        _w32(d, off, _r32(d, off) + delta);
+      }
+      pos = b.e;
     }
   }
 
@@ -183,31 +196,40 @@
           var moov = _findBox(d, 'moov');
           if (!moov) return reject(new Error('no moov'));
 
+          // Walk tracks to find video mdhd
           var changed = false, its = 1;
-          _forEachBox(d, 'mdhd', moov.s + 8, moov.e, function(box) {
-            if (changed) return;
-            var ver = d[box.s + 8];
-            var tsOff = box.s + 12;
-            if (ver === 1) tsOff += 16; else tsOff += 8;
-            var ts = _r32(d, tsOff);
-            // Check if this mdhd belongs to a video track
-            var scan = box.s;
-            while (scan > moov.s && !(d[scan+4]===109&&d[scan+5]===100&&d[scan+6]===105&&d[scan+7]===97)) scan--;
-            if (scan <= moov.s) return;
-            var hdlr = _findBox(d, 'hdlr', scan+8, scan+_r32(d, scan));
-            if (!hdlr) return;
-            if (String.fromCharCode(d[hdlr.s+12],d[hdlr.s+13],d[hdlr.s+14],d[hdlr.s+15]) !== 'vide') return;
-            // Get fps from stts in same track
-            var stts = _findBox(d, 'stts', scan+8, scan+_r32(d, scan));
-            if (stts) {
-              var cnt = _r32(d, stts.s + 12);
-              if (cnt > 0) {
-                var sd = _r32(d, stts.s + 20);
-                if (sd > 0) { var fps = Math.round(ts / sd); its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1)); }
+          var ti = moov.s + 8;
+          while (ti < moov.e - 8) {
+            var trak = _findBox(d, 'trak', ti, moov.e);
+            if (!trak) break;
+            var mdia = _findBox(d, 'mdia', trak.s + 8, trak.e);
+            if (mdia) {
+              var hdlr = _findBox(d, 'hdlr', mdia.s + 8, mdia.e);
+              if (hdlr && String.fromCharCode(d[hdlr.s+12],d[hdlr.s+13],d[hdlr.s+14],d[hdlr.s+15]) === 'vide') {
+                var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
+                if (mdhd) {
+                  var ver = d[mdhd.s + 8];
+                  var tsOff = mdhd.s + 12;
+                  if (ver === 1) tsOff += 16; else tsOff += 8;
+                  var ts = _r32(d, tsOff);
+                  // Get fps from stts
+                  var stbl = _findBox(d, 'stbl', mdia.s + 8, mdia.e);
+                  if (stbl) {
+                    var stts = _findBox(d, 'stts', stbl.s + 8, stbl.e);
+                    if (stts) {
+                      var cnt = _r32(d, stts.s + 12);
+                      if (cnt > 0) {
+                        var sd = _r32(d, stts.s + 20);
+                        if (sd > 0) { var fps = Math.round(ts / sd); its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1)); }
+                      }
+                    }
+                  }
+                  if (its > 1) { _w32(d, tsOff, Math.max(1, Math.round(ts / its))); changed = true; break; }
+                }
               }
             }
-            if (its > 1) { _w32(d, tsOff, Math.max(1, Math.round(ts / its))); changed = true; }
-          });
+            ti = trak.e;
+          }
           if (!changed) return resolve(file);
 
           // faststart: move moov right after ftyp
@@ -221,12 +243,7 @@
           var out = new Uint8Array(pre + moovLen + mid + post);
           if (pre > 0) out.set(new Uint8Array(buf, 0, pre), 0);
           out.set(new Uint8Array(buf, moov.s, moovLen), pre);
-          if (delta !== 0) {
-            _forEachBox(out, 'stco', pre + 8, pre + moovLen, function(b) {
-              var cnt = _r32(out, b.s + 12);
-              for (var j = 0; j < cnt; j++) { var off = b.s + 16 + j*4; _w32(out, off, _r32(out, off) + delta); }
-            });
-          }
+          if (delta !== 0) _adjustStco(out, pre + 8, pre + moovLen, delta);
           if (mid > 0) out.set(new Uint8Array(buf, insertAt, mid), pre + moovLen);
           if (post > 0) out.set(new Uint8Array(buf, moov.e, post), pre + moovLen + mid);
           resolve(new File([out.buffer], file.name, { type: file.type, lastModified: Date.now() }));
