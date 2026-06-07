@@ -212,29 +212,33 @@
                   if (hdlr && htype === 'vide') {
                     console.log('[EncodeX] found video track');
                     var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
-                    if (mdhd) {
+                    var stbl = _findBox(d, 'stbl', mdia.s + 8, mdia.e);
+                    if (mdhd && stbl) {
                       var ver = d[mdhd.s + 8];
-                      var tsOff = mdhd.s + 12;
-                      if (ver === 1) tsOff += 16; else tsOff += 8;
+                      var tsOff = mdhd.s + 12 + (ver === 1 ? 16 : 8);
                       var ts = _r32(d, tsOff);
-                      var its = 2;
-                      var stbl = _findBox(d, 'stbl', mdia.s + 8, mdia.e);
-                      if (stbl) {
-                        var stts = _findBox(d, 'stts', stbl.s + 8, stbl.e);
-                        if (stts) {
-                          var cnt = _r32(d, stts.s + 12);
-                          if (cnt > 0) {
-                            var sd = _r32(d, stts.s + 20);
-                            if (sd > 0) { var fps = Math.round(ts / sd); its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1)); }
+                      var stts = _findBox(d, 'stts', stbl.s + 8, stbl.e);
+                      if (stts) {
+                        var cnt = _r32(d, stts.s + 12);
+                        if (cnt > 0) {
+                          var sd = _r32(d, stts.s + 20);
+                          if (sd > 0) {
+                            var fps = Math.round(ts / sd);
+                            var its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1));
+                            if (its > 1) {
+                              console.log('[EncodeX] FPS=' + fps + ', its=' + its);
+                              for (var e = 0; e < cnt; e++) {
+                                var sdo = stts.s + 20 + e * 8;
+                                _w32(d, sdo, _r32(d, sdo) * its);
+                              }
+                              _w32(d, tsOff + 4, _r32(d, tsOff + 4) * its);
+                              console.log('[EncodeX] modified ' + cnt + ' stts entries, duration x' + its);
+                              changed = true; break;
+                            } else {
+                              console.log('[EncodeX] video already <= 30fps, skipping');
+                            }
                           }
                         }
-                      }
-                      if (its > 1) {
-                        var newTs = Math.max(1, Math.round(ts / its));
-                        console.log('[EncodeX] timescale: ' + ts + ' -> ' + newTs + ' (its=' + its + ')');
-                        _w32(d, tsOff, newTs); changed = true; break;
-                      } else {
-                        console.log('[EncodeX] video already <= 30fps, skipping');
                       }
                     }
                   }
