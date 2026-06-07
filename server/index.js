@@ -25,10 +25,20 @@ app.use(express.json());
 /* ===== PostgreSQL ===== */
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  ssl: { rejectUnauthorized: false }
 });
 
-async function init() {
+async function init(retries = 10) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await pool.query(`SELECT 1`);
+      break;
+    } catch (e) {
+      if (i === retries - 1) throw e;
+      console.log(`[DB] Waiting for database (attempt ${i + 1}/${retries})...`);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -747,7 +757,8 @@ if (process.env.DATABASE_URL) {
     app.listen(PORT, '0.0.0.0', () => console.log('Server running on port ' + PORT));
   }).catch(e => {
     console.error('Init error:', e.message);
-    process.exit(1);
+    console.log('[Server] Running in limited mode without database');
+    app.listen(PORT, '0.0.0.0', () => console.log('Server running (no DB) on port ' + PORT));
   });
 } else {
   console.warn('DATABASE_URL not set, running in limited mode');
