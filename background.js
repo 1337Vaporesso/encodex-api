@@ -16,7 +16,7 @@ chrome.runtime.onConnect.addListener(function(port) {
             clearTimeout(t);
             var CHUNK_SIZE = 65536;
             var total = buf.byteLength;
-            port.postMessage({ type: 'totalSize', totalSize: total });
+
             for (var offset = 0; offset < total; offset += CHUNK_SIZE) {
               var end = Math.min(offset + CHUNK_SIZE, total);
               var chunk = buf.slice(offset, end);
