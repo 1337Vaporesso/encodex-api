@@ -570,6 +570,7 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     const r40 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [40, 92, jobId]);
     if (!r40.rows.length) console.log('[EncodeX] DB: job not found for status 40!', jobId);
     console.log('[EncodeX] job set to 40, file size:', fs.statSync(outputPath).size);
+    try { fs.unlink(inputPath, () => {}); } catch (e) {}
     await new Promise(r => setTimeout(r, 500));
     const r200 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [200, 100, jobId]);
     if (!r200.rows.length) console.log('[EncodeX] DB: job not found for status 200!', jobId);
@@ -618,15 +619,16 @@ app.get('/api/process/result', async (req, res) => {
     if (!job.output_path) return res.status(400).json({ ok: false, error: 'No output file' });
     console.log('[EncodeX] download sending file:', job.output_path);
 
-    // Cleanup scheduled (30 min, same as before)
     const cleanup = () => {
-      setTimeout(() => {
-        pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
-        if (job.input_path) fs.unlink(job.input_path, () => {});
-        if (job.output_path) fs.unlink(job.output_path, () => {});
-        pool.query('DELETE FROM jobs WHERE id = $1', [jobId]).catch(() => {});
-      }, 1800000);
+      pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
+      if (job.input_path) fs.unlink(job.input_path, () => {});
+      if (job.output_path) fs.unlink(job.output_path, () => {});
     };
+    const safetyTimer = setTimeout(() => {
+      if (job.input_path) fs.unlink(job.input_path, () => {});
+      if (job.output_path) fs.unlink(job.output_path, () => {});
+      pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
+    }, 900000);
 
     try {
       const stat = await fs.promises.stat(job.output_path);
@@ -650,7 +652,7 @@ app.get('/api/process/result', async (req, res) => {
         if (err.code === 'EPIPE') return;
         console.error('[EncodeX] response error:', err.message);
       });
-      stream.on('end', cleanup);
+      stream.on('end', () => { clearTimeout(safetyTimer); cleanup(); });
       stream.pipe(res);
     } catch (e) {
       console.error('[EncodeX] download send error:', e.message);
