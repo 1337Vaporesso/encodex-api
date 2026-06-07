@@ -203,7 +203,7 @@
                 var mdia = _findBox(d, 'mdia', trak.s + 8, trak.e);
                 if (mdia) {
                   var hdlr = _findBox(d, 'hdlr', mdia.s + 8, mdia.e);
-                  if (hdlr && String.fromCharCode(d[hdlr.s+12],d[hdlr.s+13],d[hdlr.s+14],d[hdlr.s+15]) === 'vide') {
+                  if (hdlr && String.fromCharCode(d[hdlr.s+16],d[hdlr.s+17],d[hdlr.s+18],d[hdlr.s+19]) === 'vide') {
                     var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
                     if (mdhd) {
                       var ver = d[mdhd.s + 8];
