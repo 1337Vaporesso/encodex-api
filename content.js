@@ -555,29 +555,21 @@ window.addEventListener('message', function(event) {
 
     case 'DOWNLOAD': {
       (function download(retries) {
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId);
-        xhr.setRequestHeader('Authorization', 'Bearer ' + payload.uploadToken);
-        xhr.responseType = 'blob';
-        xhr.onload = function() {
-          if (xhr.status === 200) {
-            respond('DOWNLOAD_RESULT', {
-              ok: true, buffer: xhr.response,
-              _usageToken: payload.usageToken
-            });
-          } else {
-            respond('DOWNLOAD_RESULT', { ok: false, error: 'Download failed (' + xhr.status + ')' });
-          }
-        };
-        xhr.onerror = function() {
+        fetch(payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId, {
+          headers: { 'Authorization': 'Bearer ' + payload.uploadToken }
+        }).then(function(res) {
+          if (!res.ok) throw new Error('status ' + res.status);
+          return res.blob();
+        }).then(function(blob) {
+          respond('DOWNLOAD_RESULT', {
+            ok: true, buffer: blob,
+            _usageToken: payload.usageToken
+          });
+        }).catch(function(e) {
+          console.error('[EncodeX] download error:', e.message);
           if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
-          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download failed' });
-        };
-        xhr.onabort = function() {
-          if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
-          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download aborted' });
-        };
-        xhr.send();
+          respond('DOWNLOAD_RESULT', { ok: false, error: e.message });
+        });
       })(0);
       break;
     }

@@ -622,12 +622,17 @@ app.get('/api/process/status', async (req, res) => {
   }
 });
 
-// ---- RESULT (public, auth by job_id UUID) ----
+// ---- RESULT (public, auth by job_id UUID or token query param) ----
 app.get('/api/process/result', async (req, res) => {
   try {
     const jobId = req.query.job_id;
-    console.log('[EncodeX] download requested:', jobId);
+    const authToken = req.query.token || req.headers.authorization?.replace('Bearer ', '');
+    console.log('[EncodeX] download requested:', jobId, 'auth:', authToken ? 'yes' : 'no');
     if (!jobId) return res.status(400).json({ ok: false, error: 'No job_id' });
+    if (!authToken) return res.status(401).json({ ok: false, error: 'No auth' });
+    // Verify token
+    const tok = await pool.query('SELECT user_id, token_type FROM tokens WHERE token_value = $1 AND (token_type = $2 OR token_type = $3)', [authToken, 'upload', 'usage']);
+    if (tok.rows.length === 0) return res.status(403).json({ ok: false, error: 'Invalid token' });
     const r = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
     if (r.rows.length === 0) return res.status(404).json({ ok: false, error: 'Job not found' });
     const job = r.rows[0];
