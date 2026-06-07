@@ -643,7 +643,7 @@ app.get('/api/process/result', async (req, res) => {
 
     try {
       const stat = await fs.promises.stat(job.output_path);
-      const stream = fs.createReadStream(job.output_path, { highWaterMark: 16384 });
+      const stream = fs.createReadStream(job.output_path);
 
       res.writeHead(200, {
         'Content-Type': 'video/mp4',
