@@ -511,7 +511,37 @@ async function execFFmpeg(jobId, args, duration) {
   });
 }
 
-
+function injectViddenBox(mp4Path) {
+  const data = fs.readFileSync(mp4Path);
+  const ftypIdx = data.indexOf(Buffer.from('ftyp', 'ascii'));
+  if (ftypIdx < 4) throw new Error('no ftyp box');
+  
+  // TikTok _vidden box: size(4) + type(4) + payload
+  // Payload: version(4) + "vidden" zero-padded to 16 + signature(0)
+  const payload = Buffer.alloc(24);
+  payload.writeUInt32BE(0, 0);                     // version=0
+  payload.write('_vidden', 4, 'ascii');             // brand/marker
+  // остаток нули — заглушка
+  
+  const boxSize = 8 + payload.length;
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(boxSize, 0);
+  header.write('uuid', 4, 'ascii');                 // uuid box (proprietary)
+  
+  // Inject between ftyp and moov
+  const ftypSize = data.readUInt32BE(ftypIdx);
+  const injectAt = ftypIdx + ftypSize;
+  
+  const patched = Buffer.concat([
+    data.slice(0, injectAt),
+    header,
+    payload,
+    data.slice(injectAt)
+  ]);
+  
+  fs.writeFileSync(mp4Path, patched);
+  console.log('[EncodeX] _vidden box injected');
+}
 
 async function runFFmpegPipeline(jobId, inputPath, outputPath) {
   try {
@@ -543,14 +573,20 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       await pool.query('UPDATE jobs SET status = $1, error = $2 WHERE id = $3', [500, 'Output dir not writable: ' + we.message, jobId]);
       return;
     }
-    // -itsscale как в bat: 60fps→2, 120fps→6, 240fps→12
-    const itsscale = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1));
-    console.log('[EncodeX] remux:', fps + 'fps -> ~' + Math.round(fps / Math.max(1, itsscale)) + 'fps');
-    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', outputPath];
+    // Pure re-mux: 60fps без изменений, чистим метаданные (TikTok думает "уже обработано")
+    console.log('[EncodeX] remux: keep original fps, strip metadata');
+    const remuxArgs = ['-y', '-i', inputPath, '-c', 'copy', '-map_metadata', '-1', '-movflags', '+faststart', outputPath];
     await execFFmpeg(jobId, remuxArgs, duration);
     if (!fs.existsSync(outputPath)) {
       console.error('[EncodeX] FFmpeg exit 0 but output not found:', outputPath);
       throw new Error('FFmpeg output missing');
+    }
+
+    // Hex-patch: inject _vidden proprietary box (TikTok маркер "уже обработано")
+    try {
+      injectViddenBox(outputPath);
+    } catch (patchErr) {
+      console.log('[EncodeX] _vidden patch skipped:', patchErr.message);
     }
 
     const r40 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [40, 92, jobId]);
