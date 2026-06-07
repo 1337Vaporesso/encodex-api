@@ -555,28 +555,31 @@ window.addEventListener('message', function(event) {
 
     case 'DOWNLOAD': {
       (function download(retries) {
-        chrome.runtime.sendMessage({
-          action: 'DOWNLOAD_FILE',
-          url: payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken,
-          token: payload.uploadToken
-        }, function(res) {
-          if (chrome.runtime.lastError) {
-            console.error('[EncodeX] SW error:', chrome.runtime.lastError.message);
-            if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
-            respond('DOWNLOAD_RESULT', { ok: false, error: chrome.runtime.lastError.message });
-            return;
-          }
-          if (res && res.ok && res.buffer) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken);
+        xhr.responseType = 'blob';
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            console.log('[EncodeX] download blob size:', xhr.response.size);
             respond('DOWNLOAD_RESULT', {
-              ok: true, buffer: res.buffer,
+              ok: true, buffer: xhr.response,
               _usageToken: payload.usageToken
             });
           } else {
-            var errMsg = (res && res.error) || 'Download failed';
-            if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
-            respond('DOWNLOAD_RESULT', { ok: false, error: errMsg });
+            respond('DOWNLOAD_RESULT', { ok: false, error: 'Download failed (' + xhr.status + ')' });
           }
-        });
+        };
+        xhr.onerror = function() {
+          console.error('[EncodeX] download xhr error');
+          if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
+          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download failed' });
+        };
+        xhr.onabort = function() {
+          console.error('[EncodeX] download xhr aborted');
+          if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
+          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download aborted' });
+        };
+        xhr.send();
       })(0);
       break;
     }
