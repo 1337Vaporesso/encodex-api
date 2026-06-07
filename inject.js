@@ -63,16 +63,23 @@
     overlay.id = 'encodex-hq-overlay';
     overlay.innerHTML =
       '<div style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);font-family:\'Inter\',sans-serif;">' +
-        '<div style="background:#111;border:1px solid rgba(139,92,246,0.3);border-radius:20px;padding:30px 40px;text-align:center;max-width:340px;box-shadow:0 0 60px rgba(139,92,246,0.2);">' +
-          '<div style="width:48px;height:48px;border:3px solid rgba(139,92,246,0.2);border-top-color:#8b5cf6;border-radius:50%;animation:encodex-spin2 0.8s linear infinite;margin:0 auto 16px;"></div>' +
+        '<div id="encodex-hq-card" style="background:#111;border:1px solid rgba(139,92,246,0.3);border-radius:20px;padding:30px 40px;text-align:center;max-width:340px;box-shadow:0 0 60px rgba(139,92,246,0.2);animation:encodex-pulse 2s ease-in-out infinite;position:relative;overflow:hidden;">' +
+          '<div style="position:absolute;top:0;left:-100%;width:100%;height:2px;background:linear-gradient(90deg,transparent,#8b5cf6,transparent);animation:encodex-scanline 2s ease-in-out infinite;"></div>' +
+          '<div style="width:48px;height:48px;border:3px solid rgba(139,92,246,0.2);border-top-color:#8b5cf6;border-right-color:#a78bfa;border-radius:50%;animation:encodex-spin2 0.8s cubic-bezier(0.4,0,0.2,1) infinite;margin:0 auto 16px;"></div>' +
           '<div style="color:#fff;font-size:15px;font-weight:700;margin-bottom:6px;">HQ Upload</div>' +
           '<div style="color:rgba(255,255,255,0.5);font-size:11px;" id="encodex-hq-status">' + file.name + '</div>' +
-          '<div style="margin-top:12px;height:4px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;">' +
-            '<div id="encodex-hq-progress" style="height:100%;width:0%;background:linear-gradient(90deg,#8b5cf6,#a78bfa);border-radius:4px;transition:width 0.3s;"></div>' +
+          '<div style="margin-top:12px;height:4px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;position:relative;">' +
+            '<div id="encodex-hq-progress" style="height:100%;width:0%;background:linear-gradient(90deg,#8b5cf6,#a78bfa,#8b5cf6);background-size:200% 100%;border-radius:4px;transition:width 0.3s;animation:encodex-shimmer 1.5s ease-in-out infinite;"></div>' +
           '</div>' +
         '</div>' +
       '</div>' +
-      '<style>@keyframes encodex-spin2{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style>';
+      '<style>' +
+        '@keyframes encodex-spin2{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}' +
+        '@keyframes encodex-pulse{0%,100%{box-shadow:0 0 40px rgba(139,92,246,0.15)}50%{box-shadow:0 0 80px rgba(139,92,246,0.3)}}' +
+        '@keyframes encodex-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}' +
+        '@keyframes encodex-scanline{0%{left:-100%}100%{left:200%}}' +
+        '@keyframes encodex-glow{0%,100%{opacity:0.6}50%{opacity:1}}' +
+      '</style>';
     document.body.appendChild(overlay);
   }
 
@@ -80,7 +87,19 @@
     var el = document.getElementById('encodex-hq-status');
     var bar = document.getElementById('encodex-hq-progress');
     if (el) el.textContent = msg;
-    if (bar) bar.style.width = (pct || 0) + '%';
+    if (bar) {
+      bar.style.width = (pct || 0) + '%';
+      if (pct >= 100) {
+        bar.style.background = 'linear-gradient(90deg,#22c55e,#16a34a,#22c55e)';
+        bar.style.backgroundSize = '200% 100%';
+        var card = document.getElementById('encodex-hq-card');
+        if (card) {
+          card.style.borderColor = 'rgba(34,197,94,0.5)';
+          card.style.animation = 'encodex-pulse 2s ease-in-out infinite';
+          card.style.boxShadow = '0 0 60px rgba(34,197,94,0.2)';
+        }
+      }
+    }
   }
 
   function removeOverlay() {
@@ -210,22 +229,27 @@
             pendingInput.files = dt.files;
             pendingUsageToken = p._usageToken;
             processing = false;
-            removeOverlay();
             updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
             reentryGuard = true;
             var inp = pendingInput;
             pendingInput = null; pendingDropTarget = null;
-            inp.dispatchEvent(new Event('change', { bubbles: true }));
+            setTimeout(function() {
+              removeOverlay();
+              inp.dispatchEvent(new Event('change', { bubbles: true }));
+            }, 1000);
           } else if (pendingDropTarget) {
             var w = new DataTransfer();
             w.items.add(newFile);
             pendingUsageToken = p._usageToken;
             processing = false;
-            removeOverlay();
+            updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
             reentryGuard = true;
             var tgt = pendingDropTarget;
             pendingInput = null; pendingDropTarget = null;
-            tgt.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: w }));
+            setTimeout(function() {
+              removeOverlay();
+              tgt.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: w }));
+            }, 1000);
           } else {
             processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
           }
