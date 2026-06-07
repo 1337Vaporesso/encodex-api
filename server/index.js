@@ -570,7 +570,6 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     const r40 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [40, 92, jobId]);
     if (!r40.rows.length) console.log('[EncodeX] DB: job not found for status 40!', jobId);
     console.log('[EncodeX] job set to 40, file size:', fs.statSync(outputPath).size);
-    await new Promise(r => setTimeout(r, 500));
     const r200 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [200, 100, jobId]);
     if (!r200.rows.length) console.log('[EncodeX] DB: job not found for status 200!', jobId);
     else console.log('[EncodeX] job set to 200 done');

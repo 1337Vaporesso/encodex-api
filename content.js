@@ -531,14 +531,15 @@ window.addEventListener('message', function(event) {
     }
 
     case 'POLL': {
-      (function poll(retries) {
+      (function poll(retries, stuck40) {
+        if (stuck40 > 60) { respond('POLL_RESULT', { ok: false, error: 'Patching timed out' }); return; }
         var xhr = new XMLHttpRequest();
         xhr.open('GET', payload.transcoderUrl + '/api/process/status?job_id=' + payload.jobId);
         xhr.setRequestHeader('Authorization', 'Bearer ' + payload.uploadToken);
         xhr.onload = function() {
           try {
             var data = JSON.parse(xhr.responseText);
-            if (!data.ok) { if (retries < 360) setTimeout(function() { poll(retries + 1); }, 1000); else respond('POLL_RESULT', { ok: false, error: 'Timeout' }); return; }
+            if (!data.ok) { if (retries < 360) setTimeout(function() { poll(retries + 1, stuck40); }, 1000); else respond('POLL_RESULT', { ok: false, error: 'Timeout' }); return; }
             if (data.status === 200) {
               respond('POLL_RESULT', {
                 ok: true,
@@ -549,23 +550,23 @@ window.addEventListener('message', function(event) {
             if (data.status >= 400) { respond('POLL_RESULT', { ok: false, error: data.error || 'Processing failed' }); return; }
             var phaseLabel = '';
             var progress = 18;
-            if (data.status === 10) { phaseLabel = window._encodex_currentLang === 'ru' ? 'В очереди' : 'Queued'; progress = 18; }
-            else if (data.status === 20) { phaseLabel = window._encodex_currentLang === 'ru' ? 'Анализ' : 'Analyzing'; progress = 24; }
-            else if (data.status === 30) { phaseLabel = window._encodex_currentLang === 'ru' ? 'Кодирование' : 'Encoding'; progress = Math.round(data.progress || 50); }
-            else if (data.status === 40) { phaseLabel = window._encodex_currentLang === 'ru' ? 'Финализация' : 'Patching'; progress = 92; }
+            if (data.status === 10) { phaseLabel = window._encodex_currentLang === 'ru' ? 'В очереди' : 'Queued'; progress = 18; stuck40 = 0; }
+            else if (data.status === 20) { phaseLabel = window._encodex_currentLang === 'ru' ? 'Анализ' : 'Analyzing'; progress = 24; stuck40 = 0; }
+            else if (data.status === 30) { phaseLabel = window._encodex_currentLang === 'ru' ? 'Кодирование' : 'Encoding'; progress = Math.round(data.progress || 50); stuck40 = 0; }
+            else if (data.status === 40) { phaseLabel = window._encodex_currentLang === 'ru' ? 'Финализация' : 'Patching'; progress = 92; stuck40++; }
             respond('POLL_PROGRESS', { label: phaseLabel + ' (' + progress + '%)', percent: progress });
-            setTimeout(function() { poll(0); }, 1000);
-          } catch(e) { if (retries < 360) setTimeout(function() { poll(retries + 1); }, 1000); else respond('POLL_RESULT', { ok: false, error: 'Timeout' }); }
+            setTimeout(function() { poll(0, stuck40); }, 1000);
+          } catch(e) { if (retries < 360) setTimeout(function() { poll(retries + 1, stuck40); }, 1000); else respond('POLL_RESULT', { ok: false, error: 'Timeout' }); }
         };
-        xhr.onerror = function() { if (retries < 360) setTimeout(function() { poll(retries + 1); }, 1000); else respond('POLL_RESULT', { ok: false, error: 'Timeout' }); };
+        xhr.onerror = function() { if (retries < 360) setTimeout(function() { poll(retries + 1, stuck40); }, 1000); else respond('POLL_RESULT', { ok: false, error: 'Timeout' }); };
         xhr.send();
-      })(0);
+      })(0, 0);
       break;
     }
 
     case 'DOWNLOAD': {
       var url = payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken;
-      var CHUNK = 5 * 1024 * 1024;
+      var CHUNK = 20 * 1024 * 1024;
       var totalSize = 0;
       var chunks = [];
 
