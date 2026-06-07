@@ -62,7 +62,7 @@
     var overlay = document.createElement('div');
     overlay.id = 'encodex-hq-overlay';
     overlay.innerHTML =
-      '<div style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);font-family:\'Inter\',sans-serif;">' +
+      '<div style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);font-family:\'Sora\',sans-serif;">' +
         '<div id="encodex-hq-card" style="background:#111;border:1px solid rgba(139,92,246,0.3);border-radius:20px;padding:30px 40px;text-align:center;max-width:340px;box-shadow:0 0 60px rgba(139,92,246,0.2);animation:encodex-pulse 2s ease-in-out infinite;position:relative;overflow:hidden;">' +
           '<div style="position:absolute;top:0;left:-100%;width:100%;height:2px;background:linear-gradient(90deg,transparent,#8b5cf6,transparent);animation:encodex-scanline 2s ease-in-out infinite;"></div>' +
           '<div style="width:48px;height:48px;border:3px solid rgba(139,92,246,0.2);border-top-color:#8b5cf6;border-right-color:#a78bfa;border-radius:50%;animation:encodex-spin2 0.8s cubic-bezier(0.4,0,0.2,1) infinite;margin:0 auto 16px;"></div>' +
