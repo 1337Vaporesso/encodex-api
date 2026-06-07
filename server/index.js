@@ -509,7 +509,23 @@ async function execFFmpeg(jobId, args, duration) {
     });
     proc.on('error', (err) => { clearTimeout(timeout); clearInterval(interval); reject(err); });
   });
+}}
+
+function injectViddenBox(mp4Path) {
+  const data = fs.readFileSync(mp4Path);
+  const payload = Buffer.alloc(24);
+  payload.writeUInt32BE(0, 0);
+  payload.write('vidden', 4, 'ascii');
+  const boxSize = 8 + payload.length;
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(boxSize, 0);
+  header.write('uuid', 4, 'ascii');
+  const patched = Buffer.concat([data, header, payload]);
+  fs.writeFileSync(mp4Path, patched);
+  console.log('[EncodeX] _vidden box appended, size:', data.length, '->', patched.length);
 }
+
+
 
 
 
@@ -554,6 +570,7 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     }
 
     console.log('[EncodeX] ffmpeg done, size:', fs.statSync(outputPath).size);
+    try { injectViddenBox(outputPath); } catch (e) { console.log('[EncodeX] _vidden skip:', e.message); }
 
     const r40 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [40, 92, jobId]);
     if (!r40.rows.length) console.log('[EncodeX] DB: job not found for status 40!', jobId);
