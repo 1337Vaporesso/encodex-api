@@ -570,15 +570,17 @@ window.addEventListener('message', function(event) {
       var chunks = [];
 
       // HEAD to get total file size
-      var head = new XMLHttpRequest();
-      head.open('HEAD', url);
-      head.onload = function() {
-        totalSize = parseInt(head.getResponseHeader('Content-Length') || '0');
-        if (totalSize <= 0) { downloadSimple(url); return; }
-        downloadChunks(0);
-      };
-      head.onerror = function() { downloadSimple(url); };
-      head.send();
+      (function headReq(retries) {
+        var head = new XMLHttpRequest();
+        head.open('HEAD', url);
+        head.onload = function() {
+          totalSize = parseInt(head.getResponseHeader('Content-Length') || '0');
+          if (totalSize <= 0) { downloadSimple(url); return; }
+          downloadChunks(0);
+        };
+        head.onerror = function() { if (retries < 3) { setTimeout(function() { headReq(retries + 1); }, 3000); return; } downloadSimple(url); };
+        head.send();
+      })(0);
 
       function downloadSimple(url) {
         var xhr = new XMLHttpRequest();
