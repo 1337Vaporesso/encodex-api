@@ -555,29 +555,35 @@ window.addEventListener('message', function(event) {
 
     case 'DOWNLOAD': {
       (function download(retries) {
-        var port = chrome.runtime.connect({ name: 'download-' + payload.jobId + '-' + Date.now() });
-        var chunks = [];
-        port.onMessage.addListener(function(msg) {
-          if (msg.type === 'chunk') {
-            chunks.push(new Uint8Array(msg.data));
-          } else if (msg.type === 'done') {
-            var full = new Uint8Array(msg.totalSize);
-            var offset = 0;
-            for (var i = 0; i < chunks.length; i++) {
-              full.set(chunks[i], offset);
-              offset += chunks[i].length;
-            }
-            var blob = new Blob([full], { type: 'video/mp4' });
-            console.log('[EncodeX] download reassembled:', blob.size, 'bytes');
-            respond('DOWNLOAD_RESULT', { ok: true, buffer: blob, _usageToken: payload.usageToken });
-          } else if (msg.type === 'error') {
-            console.error('[EncodeX] SW chunked error:', msg.error);
-            port.disconnect();
-            if (retries < 3) { setTimeout(function() { download(retries + 1); }, 3000); return; }
-            respond('DOWNLOAD_RESULT', { ok: false, error: msg.error });
+        var url = payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken;
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url);
+        xhr.responseType = 'arraybuffer';
+        xhr.timeout = 180000;
+        xhr.onprogress = function(e) {
+          if (e.lengthComputable)
+            respond('DOWNLOAD_PROGRESS', { label: 'Downloading...', percent: 80 + Math.round(e.loaded / e.total * 15) });
+        };
+        xhr.onload = function() {
+          if (xhr.status !== 200) {
+            if (retries < 5) { setTimeout(function() { download(retries + 1); }, 3000 * (retries + 1)); return; }
+            return respond('DOWNLOAD_RESULT', { ok: false, error: 'HTTP ' + xhr.status });
           }
-        });
-        port.postMessage({ action: 'DOWNLOAD_CHUNKED', url: payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken, token: payload.uploadToken });
+          var blob = new Blob([xhr.response], { type: 'video/mp4' });
+          console.log('[EncodeX] download complete:', blob.size, 'bytes');
+          respond('DOWNLOAD_RESULT', { ok: true, buffer: blob, _usageToken: payload.usageToken });
+        };
+        xhr.onerror = function() {
+          console.error('[EncodeX] download error:', xhr.status, xhr.statusText);
+          if (retries < 5) { setTimeout(function() { download(retries + 1); }, 3000 * (retries + 1)); return; }
+          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download failed' });
+        };
+        xhr.ontimeout = function() {
+          console.error('[EncodeX] download timeout');
+          if (retries < 5) { setTimeout(function() { download(retries + 1); }, 3000 * (retries + 1)); return; }
+          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download timeout' });
+        };
+        xhr.send();
       })(0);
       break;
     }

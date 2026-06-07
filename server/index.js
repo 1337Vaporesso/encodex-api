@@ -608,7 +608,6 @@ app.get('/api/process/result', async (req, res) => {
     console.log('[EncodeX] download requested:', jobId, 'auth:', authToken ? 'yes' : 'no');
     if (!jobId) return res.status(400).json({ ok: false, error: 'No job_id' });
     if (!authToken) return res.status(401).json({ ok: false, error: 'No auth' });
-    // Verify token
     const tok = await pool.query('SELECT user_id, token_type FROM tokens WHERE token_value = $1 AND (token_type = $2 OR token_type = $3)', [authToken, 'upload', 'usage']);
     if (tok.rows.length === 0) return res.status(403).json({ ok: false, error: 'Invalid token' });
     const r = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
@@ -619,18 +618,48 @@ app.get('/api/process/result', async (req, res) => {
     if (!job.output_path) return res.status(400).json({ ok: false, error: 'No output file' });
     console.log('[EncodeX] download sending file:', job.output_path);
 
-    res.download(job.output_path, 'video.mp4', async function(err) {
-      if (err) console.error('Download error:', err.message);
-      // Удаляем токены и файлы через 30 мин (ретраи клиента могут быть多次)
+    // Cleanup scheduled (30 min, same as before)
+    const cleanup = () => {
       setTimeout(() => {
         pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
         if (job.input_path) fs.unlink(job.input_path, () => {});
         if (job.output_path) fs.unlink(job.output_path, () => {});
         pool.query('DELETE FROM jobs WHERE id = $1', [jobId]).catch(() => {});
       }, 1800000);
-    });
+    };
+
+    try {
+      const stat = await fs.promises.stat(job.output_path);
+      const stream = fs.createReadStream(job.output_path);
+
+      res.writeHead(200, {
+        'Content-Type': 'video/mp4',
+        'Content-Length': stat.size,
+        'Content-Disposition': 'attachment; filename="video.mp4"',
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-cache'
+      });
+
+      let aborted = false;
+      req.on('close', () => { aborted = true; stream.destroy(); });
+      stream.on('error', (err) => {
+        if (aborted || err.code === 'EPIPE') return;
+        console.error('[EncodeX] stream error:', err.message);
+      });
+      res.on('error', (err) => {
+        if (err.code === 'EPIPE') return;
+        console.error('[EncodeX] response error:', err.message);
+      });
+      stream.on('end', cleanup);
+      stream.pipe(res);
+    } catch (e) {
+      console.error('[EncodeX] download send error:', e.message);
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+      cleanup();
+    }
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('[EncodeX] download error:', e.message);
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
