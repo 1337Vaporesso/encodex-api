@@ -191,8 +191,10 @@
           try {
             var buf = e.target.result;
             var d = new Uint8Array(buf);
+            console.log('[EncodeX] file size: ' + buf.byteLength);
             var moov = _findBox(d, 'moov');
-            if (!moov) return resolve(file);
+            if (!moov) { console.log('[EncodeX] no moov found, skipping'); return resolve(file); }
+            console.log('[EncodeX] moov found at offset ' + moov.s);
             if (onProgress) onProgress((lang === 'ru' ? 'Анализ' : 'Analyzing') + ' (75%)', 75);
             setTimeout(function() {
               var changed = false;
@@ -203,7 +205,12 @@
                 var mdia = _findBox(d, 'mdia', trak.s + 8, trak.e);
                 if (mdia) {
                   var hdlr = _findBox(d, 'hdlr', mdia.s + 8, mdia.e);
-                  if (hdlr && String.fromCharCode(d[hdlr.s+16],d[hdlr.s+17],d[hdlr.s+18],d[hdlr.s+19]) === 'vide') {
+                  if (hdlr) {
+                    var htype = String.fromCharCode(d[hdlr.s+16],d[hdlr.s+17],d[hdlr.s+18],d[hdlr.s+19]);
+                    console.log('[EncodeX] hdlr handler_type=' + htype);
+                  }
+                  if (hdlr && htype === 'vide') {
+                    console.log('[EncodeX] found video track');
                     var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
                     if (mdhd) {
                       var ver = d[mdhd.s + 8];
@@ -222,30 +229,21 @@
                           }
                         }
                       }
-                      if (its > 1) { _w32(d, tsOff, Math.max(1, Math.round(ts / its))); changed = true; break; }
+                      if (its > 1) {
+                        var newTs = Math.max(1, Math.round(ts / its));
+                        console.log('[EncodeX] timescale: ' + ts + ' -> ' + newTs + ' (its=' + its + ')');
+                        _w32(d, tsOff, newTs); changed = true; break;
+                      } else {
+                        console.log('[EncodeX] video already <= 30fps, skipping');
+                      }
                     }
                   }
                 }
                 ti = trak.e;
               }
               if (!changed) return resolve(file);
-              if (onProgress) onProgress((lang === 'ru' ? 'Финализация' : 'Finalizing') + ' (85%)', 85);
-              setTimeout(function() {
-                var ftyp = _findBox(d, 'ftyp');
-                var insertAt = ftyp ? ftyp.s + ftyp.z : 0;
-                if (insertAt === moov.s) return resolve(new File([buf], file.name, { type: file.type, lastModified: Date.now() }));
-                var mdat = _findBox(d, 'mdat');
-                var delta = (mdat && mdat.s >= moov.e) ? 0 : moov.z;
-                var pre = insertAt, mid = moov.s - insertAt, moovLen = moov.z, post = buf.byteLength - moov.e;
-                var out = new Uint8Array(pre + moovLen + mid + post);
-                if (pre > 0) out.set(new Uint8Array(buf, 0, pre), 0);
-                out.set(new Uint8Array(buf, moov.s, moovLen), pre);
-                if (delta !== 0) _adjustStco(out, pre + 8, pre + moovLen, delta);
-                if (mid > 0) out.set(new Uint8Array(buf, insertAt, mid), pre + moovLen);
-                if (post > 0) out.set(new Uint8Array(buf, moov.e, post), pre + moovLen + mid);
-                if (onProgress) onProgress((lang === 'ru' ? 'Готово' : 'Done') + ' (100%)', 100);
-                resolve(new File([out.buffer], file.name, { type: file.type, lastModified: Date.now() }));
-              }, 30);
+              if (onProgress) onProgress((lang === 'ru' ? 'Готово' : 'Done') + ' (100%)', 100);
+              resolve(new File([buf], file.name, { type: file.type, lastModified: Date.now() }));
             }, 30);
           } catch(err) { reject(err); }
         }, 30);
