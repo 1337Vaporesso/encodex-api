@@ -554,37 +554,45 @@ window.addEventListener('message', function(event) {
     }
 
     case 'DOWNLOAD': {
-      (function download(retries) {
-        var url = payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken;
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', url);
-        xhr.responseType = 'arraybuffer';
-        xhr.timeout = 180000;
-        xhr.onprogress = function(e) {
-          if (e.lengthComputable)
-            respond('DOWNLOAD_PROGRESS', { label: 'Downloading...', percent: 80 + Math.round(e.loaded / e.total * 15) });
-        };
-        xhr.onload = function() {
-          if (xhr.status !== 200) {
-            if (retries < 5) { setTimeout(function() { download(retries + 1); }, 3000 * (retries + 1)); return; }
-            return respond('DOWNLOAD_RESULT', { ok: false, error: 'HTTP ' + xhr.status });
+      var url = payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken;
+      var port = chrome.runtime.connect({ name: 'download-' + Date.now() });
+      var chunks = [];
+      var bytesReceived = 0;
+      var totalSize = 0;
+      var lastPct = -1;
+      var downloadTimer = setTimeout(function() {
+        console.error('[EncodeX] download timeout via SW');
+        respond('DOWNLOAD_RESULT', { ok: false, error: 'Download timeout' });
+      }, 600000);
+      port.onMessage.addListener(function(msg) {
+        if (msg.type === 'totalSize') {
+          totalSize = msg.totalSize;
+        } else if (msg.type === 'chunk') {
+          chunks.push(msg.data);
+          bytesReceived += msg.data.byteLength;
+          if (totalSize > 0) {
+            var pct = Math.round(bytesReceived / totalSize * 15);
+            if (pct !== lastPct) {
+              lastPct = pct;
+              respond('DOWNLOAD_PROGRESS', { label: 'Downloading...', percent: 80 + pct });
+            }
+          } else {
+            respond('DOWNLOAD_PROGRESS', { label: 'Downloading...', percent: 85 });
           }
-          var blob = new Blob([xhr.response], { type: 'video/mp4' });
+        } else if (msg.type === 'done') {
+          clearTimeout(downloadTimer);
+          totalSize = msg.totalSize;
+          var blob = new Blob(chunks, { type: 'video/mp4' });
           console.log('[EncodeX] download complete:', blob.size, 'bytes');
+          respond('DOWNLOAD_PROGRESS', { label: 'Downloading...', percent: 95 });
           respond('DOWNLOAD_RESULT', { ok: true, buffer: blob, _usageToken: payload.usageToken });
-        };
-        xhr.onerror = function() {
-          console.error('[EncodeX] download error:', xhr.status, xhr.statusText);
-          if (retries < 5) { setTimeout(function() { download(retries + 1); }, 3000 * (retries + 1)); return; }
-          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download failed' });
-        };
-        xhr.ontimeout = function() {
-          console.error('[EncodeX] download timeout');
-          if (retries < 5) { setTimeout(function() { download(retries + 1); }, 3000 * (retries + 1)); return; }
-          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download timeout' });
-        };
-        xhr.send();
-      })(0);
+        } else if (msg.type === 'error') {
+          clearTimeout(downloadTimer);
+          console.error('[EncodeX] download error via SW:', msg.error);
+          respond('DOWNLOAD_RESULT', { ok: false, error: msg.error });
+        }
+      });
+      port.postMessage({ action: 'DOWNLOAD_CHUNKED', url: url });
       break;
     }
 
