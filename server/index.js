@@ -509,7 +509,7 @@ async function execFFmpeg(jobId, args, duration) {
     });
     proc.on('error', (err) => { clearTimeout(timeout); clearInterval(interval); reject(err); });
   });
-}}
+}
 
 function injectViddenBox(mp4Path) {
   const data = fs.readFileSync(mp4Path);
