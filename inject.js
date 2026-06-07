@@ -15,26 +15,9 @@
   window._encodex_hqEnabled = false;
   window._encodex_currentLang = 'ru';
 
-  // === Override URL.createObjectURL: 8-byte dummy (��� � Editing News) ===
-  if (!window._enx_urlPatched) {
-    window._enx_urlPatched = true;
-    var _origCreateURL = URL.createObjectURL;
-    var _origRevokeURL = URL.revokeObjectURL;
-    var _dummyBlob = new Blob([new Uint8Array(8)], { type: 'application/octet-stream' });
-    var _dummyUrl = _origCreateURL.call(URL, _dummyBlob);
-    console.log('[EncodeX] dummy blob URL:', _dummyUrl);
-    URL.revokeObjectURL = function(url) {
-      if (url === _dummyUrl) { console.log('[EncodeX] blocked revoke of dummy blob URL'); return; }
-      return _origRevokeURL.call(URL, url);
-    };
-    URL.createObjectURL = function(obj) {
-      if (obj instanceof Blob && obj.type && obj.type.indexOf('video/') === 0) {
-        console.log('[EncodeX] URL.createObjectURL: returning dummy for video blob, size=' + (obj.size || '?'));
-        return _dummyUrl;
-      }
-      return _origCreateURL.call(URL, obj);
-    };
-  }
+  // === URL.createObjectURL: не оверрайдим, TikTok сам обрабатывает файл ===
+  // (серверный FFmpeg меняет metadata, TikTok не ресайзит)
+  // (никакого dummy blob — TikTok должен видеть реальный файл для preview)
 
   // === MediaRecorder interceptor (check if TikTok uses client-side re-encode) ===
   if (!window._enx_mrPatched) {
