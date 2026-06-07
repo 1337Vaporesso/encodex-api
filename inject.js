@@ -197,53 +197,53 @@
             console.log('[EncodeX] moov found at offset ' + moov.s);
             if (onProgress) onProgress((lang === 'ru' ? 'Анализ' : 'Analyzing') + ' (75%)', 75);
             setTimeout(function() {
-              var changed = false;
+              var its = 1;
+              var tracks = [];
               var ti = moov.s + 8;
               while (ti < moov.e - 8) {
                 var trak = _findBox(d, 'trak', ti, moov.e);
                 if (!trak) break;
-                var mdia = _findBox(d, 'mdia', trak.s + 8, trak.e);
-                if (mdia) {
-                  var hdlr = _findBox(d, 'hdlr', mdia.s + 8, mdia.e);
-                  if (hdlr) {
-                    var htype = String.fromCharCode(d[hdlr.s+16],d[hdlr.s+17],d[hdlr.s+18],d[hdlr.s+19]);
-                    console.log('[EncodeX] hdlr handler_type=' + htype);
-                  }
-                  if (hdlr && htype === 'vide') {
-                    console.log('[EncodeX] found video track');
-                    var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
-                    var stbl = _findBox(d, 'stbl', mdia.s + 8, mdia.e);
-                    if (mdhd && stbl) {
-                      var ver = d[mdhd.s + 8];
-                      var tsOff = mdhd.s + 12 + (ver === 1 ? 16 : 8);
-                      var ts = _r32(d, tsOff);
-                      var stts = _findBox(d, 'stts', stbl.s + 8, stbl.e);
-                      if (stts) {
-                        var cnt = _r32(d, stts.s + 12);
-                        if (cnt > 0) {
-                          var sd = _r32(d, stts.s + 20);
-                          if (sd > 0) {
-                            var fps = Math.round(ts / sd);
-                            var its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1));
-                            if (its > 1) {
-                              console.log('[EncodeX] FPS=' + fps + ', its=' + its);
-                              for (var e = 0; e < cnt; e++) {
-                                var sdo = stts.s + 20 + e * 8;
-                                _w32(d, sdo, _r32(d, sdo) * its);
-                              }
-                              _w32(d, tsOff + 4, _r32(d, tsOff + 4) * its);
-                              console.log('[EncodeX] modified ' + cnt + ' stts entries, duration x' + its);
-                              changed = true; break;
-                            } else {
-                              console.log('[EncodeX] video already <= 30fps, skipping');
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
+                tracks.push(trak);
                 ti = trak.e;
+              }
+              for (var t = 0; t < tracks.length && its === 1; t++) {
+                var mdia = _findBox(d, 'mdia', tracks[t].s + 8, tracks[t].e);
+                if (!mdia) continue;
+                var hdlr = _findBox(d, 'hdlr', mdia.s + 8, mdia.e);
+                if (!hdlr) continue;
+                var htype = String.fromCharCode(d[hdlr.s+16],d[hdlr.s+17],d[hdlr.s+18],d[hdlr.s+19]);
+                if (htype !== 'vide') continue;
+                var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
+                var stbl = _findBox(d, 'stbl', mdia.s + 8, mdia.e);
+                if (!mdhd || !stbl) continue;
+                var tsOff = mdhd.s + 12 + (d[mdhd.s + 8] === 1 ? 16 : 8);
+                var stts = _findBox(d, 'stts', stbl.s + 8, stbl.e);
+                if (!stts) continue;
+                var cnt = _r32(d, stts.s + 12);
+                if (cnt === 0) continue;
+                var sd = _r32(d, stts.s + 20);
+                if (sd > 0) { var fps = Math.round(_r32(d, tsOff) / sd); its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1)); }
+              }
+              if (its <= 1) { console.log('[EncodeX] video already <= 30fps, skipping'); return resolve(file); }
+              console.log('[EncodeX] its=' + its + ', applying to all tracks');
+              var changed = false;
+              for (var t = 0; t < tracks.length; t++) {
+                var mdia = _findBox(d, 'mdia', tracks[t].s + 8, tracks[t].e);
+                if (!mdia) continue;
+                var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
+                var stbl = _findBox(d, 'stbl', mdia.s + 8, mdia.e);
+                if (!mdhd || !stbl) continue;
+                var stts = _findBox(d, 'stts', stbl.s + 8, stbl.e);
+                if (!stts) continue;
+                var cnt = _r32(d, stts.s + 12);
+                if (cnt === 0) continue;
+                var tsOff = mdhd.s + 12 + (d[mdhd.s + 8] === 1 ? 16 : 8);
+                for (var e = 0; e < cnt; e++) { _w32(d, stts.s + 20 + e * 8, _r32(d, stts.s + 20 + e * 8) * its); }
+                _w32(d, tsOff + 4, _r32(d, tsOff + 4) * its);
+                var hdlr2 = _findBox(d, 'hdlr', mdia.s + 8, mdia.e);
+                var htype2 = hdlr2 ? String.fromCharCode(d[hdlr2.s+16],d[hdlr2.s+17],d[hdlr2.s+18],d[hdlr2.s+19]) : '?';
+                console.log('[EncodeX] track ' + htype2 + ': ' + cnt + ' stts, dur x' + its);
+                changed = true;
               }
               if (!changed) return resolve(file);
               if (onProgress) onProgress((lang === 'ru' ? 'Готово' : 'Done') + ' (100%)', 100);
