@@ -555,31 +555,29 @@ window.addEventListener('message', function(event) {
 
     case 'DOWNLOAD': {
       (function download(retries) {
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken);
-        xhr.responseType = 'blob';
-        xhr.onload = function() {
-          if (xhr.status === 200) {
-            console.log('[EncodeX] download blob size:', xhr.response.size);
-            respond('DOWNLOAD_RESULT', {
-              ok: true, buffer: xhr.response,
-              _usageToken: payload.usageToken
-            });
-          } else {
-            respond('DOWNLOAD_RESULT', { ok: false, error: 'Download failed (' + xhr.status + ')' });
+        var port = chrome.runtime.connect({ name: 'download-' + payload.jobId + '-' + Date.now() });
+        var chunks = [];
+        port.onMessage.addListener(function(msg) {
+          if (msg.type === 'chunk') {
+            chunks.push(new Uint8Array(msg.data));
+          } else if (msg.type === 'done') {
+            var full = new Uint8Array(msg.totalSize);
+            var offset = 0;
+            for (var i = 0; i < chunks.length; i++) {
+              full.set(chunks[i], offset);
+              offset += chunks[i].length;
+            }
+            var blob = new Blob([full], { type: 'video/mp4' });
+            console.log('[EncodeX] download reassembled:', blob.size, 'bytes');
+            respond('DOWNLOAD_RESULT', { ok: true, buffer: blob, _usageToken: payload.usageToken });
+          } else if (msg.type === 'error') {
+            console.error('[EncodeX] SW chunked error:', msg.error);
+            port.disconnect();
+            if (retries < 3) { setTimeout(function() { download(retries + 1); }, 3000); return; }
+            respond('DOWNLOAD_RESULT', { ok: false, error: msg.error });
           }
-        };
-        xhr.onerror = function() {
-          console.error('[EncodeX] download xhr error');
-          if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
-          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download failed' });
-        };
-        xhr.onabort = function() {
-          console.error('[EncodeX] download xhr aborted');
-          if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
-          respond('DOWNLOAD_RESULT', { ok: false, error: 'Download aborted' });
-        };
-        xhr.send();
+        });
+        port.postMessage({ action: 'DOWNLOAD_CHUNKED', url: payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken, token: payload.uploadToken });
       })(0);
       break;
     }
