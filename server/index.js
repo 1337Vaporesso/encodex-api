@@ -750,6 +750,17 @@ function checkFFmpeg() {
 }
 checkFFmpeg();
 
+/* ===== Global error handlers ===== */
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[UNHANDLED REJECTION]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]', err.message, err.stack);
+});
+
+/* ===== Health check ===== */
+app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
 /* ===== Start ===== */
 const PORT = process.env.PORT || 3000;
 if (process.env.DATABASE_URL) {
