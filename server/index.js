@@ -513,34 +513,17 @@ async function execFFmpeg(jobId, args, duration) {
 
 function injectViddenBox(mp4Path) {
   const data = fs.readFileSync(mp4Path);
-  const ftypIdx = data.indexOf(Buffer.from('ftyp', 'ascii'));
-  if (ftypIdx < 4) throw new Error('no ftyp box');
-  
-  // TikTok _vidden box: size(4) + type(4) + payload
-  // Payload: version(4) + "vidden" zero-padded to 16 + signature(0)
+  // Inject at END of file (не ломает оффсеты внутри moov)
   const payload = Buffer.alloc(24);
-  payload.writeUInt32BE(0, 0);                     // version=0
-  payload.write('_vidden', 4, 'ascii');             // brand/marker
-  // остаток нули — заглушка
-  
+  payload.writeUInt32BE(0, 0);
+  payload.write('vidden', 4, 'ascii');
   const boxSize = 8 + payload.length;
   const header = Buffer.alloc(8);
   header.writeUInt32BE(boxSize, 0);
-  header.write('uuid', 4, 'ascii');                 // uuid box (proprietary)
-  
-  // Inject between ftyp and moov
-  const ftypSize = data.readUInt32BE(ftypIdx);
-  const injectAt = ftypIdx + ftypSize;
-  
-  const patched = Buffer.concat([
-    data.slice(0, injectAt),
-    header,
-    payload,
-    data.slice(injectAt)
-  ]);
-  
+  header.write('uuid', 4, 'ascii');
+  const patched = Buffer.concat([data, header, payload]);
   fs.writeFileSync(mp4Path, patched);
-  console.log('[EncodeX] _vidden box injected');
+  console.log('[EncodeX] _vidden box injected at end, size before:', data.length, 'after:', patched.length);
 }
 
 async function runFFmpegPipeline(jobId, inputPath, outputPath) {
