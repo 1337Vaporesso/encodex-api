@@ -488,37 +488,45 @@ window.addEventListener('message', function(event) {
     }
 
     case 'UPLOAD': {
-      var fd = new FormData();
-      fd.append('video', payload._file);
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', payload.transcoderUrl + '/api/process/upload');
-      xhr.setRequestHeader('Authorization', 'Bearer ' + payload.uploadToken);
-      xhr.timeout = 120000;
-      xhr.upload.onprogress = function(e) {
-        if (e.lengthComputable) {
-          var pct = Math.round((e.loaded / e.total) * 100 * 0.16 + 2);
-          var loadedMB = (e.loaded / 1048576).toFixed(1);
-          var totalMB = (e.total / 1048576).toFixed(1);
-          var label = (window._encodex_currentLang === 'ru' ? 'Загрузка' : 'Uploading') + ' ' + loadedMB + '/' + totalMB + ' MB (' + pct + '%)';
-          respond('UPLOAD_PROGRESS', { percent: pct, label: label });
-        }
-      };
-      xhr.onload = function() {
-        try {
-          var data = JSON.parse(xhr.responseText);
-          if (data.ok) {
-            respond('UPLOAD_RESULT', {
-              ok: true, jobId: data.job_id,
-              transcoderUrl: payload.transcoderUrl, uploadToken: payload.uploadToken, usageToken: payload.usageToken
-            });
-          } else {
-            respond('UPLOAD_RESULT', { ok: false, error: data.error || 'Upload failed' });
+      (function attemptUpload(retries) {
+        var fd = new FormData();
+        fd.append('video', payload._file);
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', payload.transcoderUrl + '/api/process/upload');
+        xhr.setRequestHeader('Authorization', 'Bearer ' + payload.uploadToken);
+        xhr.timeout = 300000;
+        xhr.upload.onprogress = function(e) {
+          if (e.lengthComputable) {
+            var pct = Math.round((e.loaded / e.total) * 100 * 0.16 + 2);
+            var loadedMB = (e.loaded / 1048576).toFixed(1);
+            var totalMB = (e.total / 1048576).toFixed(1);
+            var label = (window._encodex_currentLang === 'ru' ? 'Загрузка' : 'Uploading') + ' ' + loadedMB + '/' + totalMB + ' MB (' + pct + '%)';
+            respond('UPLOAD_PROGRESS', { percent: pct, label: label });
           }
-        } catch(e) { respond('UPLOAD_RESULT', { ok: false, error: 'Invalid response' }); }
-      };
-      xhr.onerror = function() { respond('UPLOAD_RESULT', { ok: false, error: 'Network error' }); };
-      xhr.ontimeout = function() { respond('UPLOAD_RESULT', { ok: false, error: 'Upload timeout' }); };
-      xhr.send(fd);
+        };
+        xhr.onload = function() {
+          try {
+            var data = JSON.parse(xhr.responseText);
+            if (data.ok) {
+              respond('UPLOAD_RESULT', {
+                ok: true, jobId: data.job_id,
+                transcoderUrl: payload.transcoderUrl, uploadToken: payload.uploadToken, usageToken: payload.usageToken
+              });
+            } else {
+              respond('UPLOAD_RESULT', { ok: false, error: data.error || 'Upload failed' });
+            }
+          } catch(e) { respond('UPLOAD_RESULT', { ok: false, error: 'Invalid response' }); }
+        };
+        xhr.onerror = function() {
+          if (retries < 3) { setTimeout(function() { attemptUpload(retries + 1); }, 5000 * (retries + 1)); return; }
+          respond('UPLOAD_RESULT', { ok: false, error: 'Network error' });
+        };
+        xhr.ontimeout = function() {
+          if (retries < 3) { setTimeout(function() { attemptUpload(retries + 1); }, 5000 * (retries + 1)); return; }
+          respond('UPLOAD_RESULT', { ok: false, error: 'Upload timeout' });
+        };
+        xhr.send(fd);
+      })(0);
       break;
     }
 
