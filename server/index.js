@@ -25,7 +25,7 @@ app.use(express.json());
 /* ===== PostgreSQL ===== */
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
 async function init() {
@@ -570,7 +570,6 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     const r40 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [40, 92, jobId]);
     if (!r40.rows.length) console.log('[EncodeX] DB: job not found for status 40!', jobId);
     console.log('[EncodeX] job set to 40, file size:', fs.statSync(outputPath).size);
-    try { fs.unlink(inputPath, () => {}); } catch (e) {}
     await new Promise(r => setTimeout(r, 500));
     const r200 = await pool.query('UPDATE jobs SET status = $1, progress = $2 WHERE id = $3 RETURNING id', [200, 100, jobId]);
     if (!r200.rows.length) console.log('[EncodeX] DB: job not found for status 200!', jobId);
@@ -619,16 +618,15 @@ app.get('/api/process/result', async (req, res) => {
     if (!job.output_path) return res.status(400).json({ ok: false, error: 'No output file' });
     console.log('[EncodeX] download sending file:', job.output_path);
 
+    // Cleanup scheduled (30 min, same as before)
     const cleanup = () => {
-      pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
-      if (job.input_path) fs.unlink(job.input_path, () => {});
-      if (job.output_path) fs.unlink(job.output_path, () => {});
+      setTimeout(() => {
+        pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
+        if (job.input_path) fs.unlink(job.input_path, () => {});
+        if (job.output_path) fs.unlink(job.output_path, () => {});
+        pool.query('DELETE FROM jobs WHERE id = $1', [jobId]).catch(() => {});
+      }, 1800000);
     };
-    const safetyTimer = setTimeout(() => {
-      if (job.input_path) fs.unlink(job.input_path, () => {});
-      if (job.output_path) fs.unlink(job.output_path, () => {});
-      pool.query('DELETE FROM tokens WHERE job_id = $1', [jobId]).catch(() => {});
-    }, 900000);
 
     try {
       const stat = await fs.promises.stat(job.output_path);
@@ -652,7 +650,7 @@ app.get('/api/process/result', async (req, res) => {
         if (err.code === 'EPIPE') return;
         console.error('[EncodeX] response error:', err.message);
       });
-      stream.on('end', () => { clearTimeout(safetyTimer); cleanup(); });
+      stream.on('end', cleanup);
       stream.pipe(res);
     } catch (e) {
       console.error('[EncodeX] download send error:', e.message);
@@ -742,17 +740,6 @@ function checkFFmpeg() {
 }
 checkFFmpeg();
 
-/* ===== Global error handlers ===== */
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[UNHANDLED REJECTION]', reason);
-});
-process.on('uncaughtException', (err) => {
-  console.error('[UNCAUGHT EXCEPTION]', err.message, err.stack);
-});
-
-/* ===== Health check ===== */
-app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
-
 /* ===== Start ===== */
 const PORT = process.env.PORT || 3000;
 if (process.env.DATABASE_URL) {
@@ -760,8 +747,7 @@ if (process.env.DATABASE_URL) {
     app.listen(PORT, '0.0.0.0', () => console.log('Server running on port ' + PORT));
   }).catch(e => {
     console.error('Init error:', e.message);
-    console.log('[Server] Running in limited mode without database');
-    app.listen(PORT, '0.0.0.0', () => console.log('Server running (no DB) on port ' + PORT));
+    process.exit(1);
   });
 } else {
   console.warn('DATABASE_URL not set, running in limited mode');
