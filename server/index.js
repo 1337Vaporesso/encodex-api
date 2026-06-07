@@ -573,9 +573,10 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
       await pool.query('UPDATE jobs SET status = $1, error = $2 WHERE id = $3', [500, 'Output dir not writable: ' + we.message, jobId]);
       return;
     }
-    // Pure re-mux: 60fps без изменений, чистим метаданные (TikTok думает "уже обработано")
-    console.log('[EncodeX] remux: keep original fps, strip metadata');
-    const remuxArgs = ['-y', '-i', inputPath, '-c', 'copy', '-map_metadata', '-1', '-movflags', '+faststart', outputPath];
+    // -itsscale 2 как в bat: меняет PTS → 60fps→30fps → TikTok не ресайзит
+    const itsscale = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1));
+    console.log('[EncodeX] remux: -itsscale', itsscale, fps + 'fps -> ~' + Math.round(fps / Math.max(1, itsscale)) + 'fps');
+    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', '-map_metadata', '-1', outputPath];
     await execFFmpeg(jobId, remuxArgs, duration);
     if (!fs.existsSync(outputPath)) {
       console.error('[EncodeX] FFmpeg exit 0 but output not found:', outputPath);
