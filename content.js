@@ -555,20 +555,27 @@ window.addEventListener('message', function(event) {
 
     case 'DOWNLOAD': {
       (function download(retries) {
-        fetch(payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId, {
-          headers: { 'Authorization': 'Bearer ' + payload.uploadToken }
-        }).then(function(res) {
-          if (!res.ok) throw new Error('status ' + res.status);
-          return res.blob();
-        }).then(function(blob) {
-          respond('DOWNLOAD_RESULT', {
-            ok: true, buffer: blob,
-            _usageToken: payload.usageToken
-          });
-        }).catch(function(e) {
-          console.error('[EncodeX] download error:', e.message);
-          if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
-          respond('DOWNLOAD_RESULT', { ok: false, error: e.message });
+        chrome.runtime.sendMessage({
+          action: 'DOWNLOAD_FILE',
+          url: payload.transcoderUrl + '/api/process/result?job_id=' + payload.jobId + '&token=' + payload.uploadToken,
+          token: payload.uploadToken
+        }, function(res) {
+          if (chrome.runtime.lastError) {
+            console.error('[EncodeX] SW error:', chrome.runtime.lastError.message);
+            if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
+            respond('DOWNLOAD_RESULT', { ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          if (res && res.ok && res.buffer) {
+            respond('DOWNLOAD_RESULT', {
+              ok: true, buffer: res.buffer,
+              _usageToken: payload.usageToken
+            });
+          } else {
+            var errMsg = (res && res.error) || 'Download failed';
+            if (retries < 3) { setTimeout(function() { download(retries + 1); }, 2000); return; }
+            respond('DOWNLOAD_RESULT', { ok: false, error: errMsg });
+          }
         });
       })(0);
       break;
