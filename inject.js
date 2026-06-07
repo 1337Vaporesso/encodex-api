@@ -175,66 +175,80 @@
     }
   }
 
-  function processLocally(file) {
+  function processLocally(file, onProgress) {
     return new Promise(function(resolve, reject) {
+      var lang = window._encodex_currentLang || 'ru';
       var reader = new FileReader();
+      reader.onprogress = function(e) {
+        if (e.lengthComputable && onProgress) {
+          var pct = Math.round((e.loaded / e.total) * 65);
+          onProgress((lang === 'ru' ? 'Чтение' : 'Reading') + ' (' + pct + '%)', pct);
+        }
+      };
       reader.onload = function(e) {
-        try {
-          var buf = e.target.result;
-          var d = new Uint8Array(buf);
-          var moov = _findBox(d, 'moov');
-          if (!moov) return reject(new Error('no moov'));
-
-          var changed = false;
-          var ti = moov.s + 8;
-          while (ti < moov.e - 8) {
-            var trak = _findBox(d, 'trak', ti, moov.e);
-            if (!trak) break;
-            var mdia = _findBox(d, 'mdia', trak.s + 8, trak.e);
-            if (mdia) {
-              var hdlr = _findBox(d, 'hdlr', mdia.s + 8, mdia.e);
-              if (hdlr && String.fromCharCode(d[hdlr.s+12],d[hdlr.s+13],d[hdlr.s+14],d[hdlr.s+15]) === 'vide') {
-                var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
-                if (mdhd) {
-                  var ver = d[mdhd.s + 8];
-                  var tsOff = mdhd.s + 12;
-                  if (ver === 1) tsOff += 16; else tsOff += 8;
-                  var ts = _r32(d, tsOff);
-                  var its = 2;
-                  var stbl = _findBox(d, 'stbl', mdia.s + 8, mdia.e);
-                  if (stbl) {
-                    var stts = _findBox(d, 'stts', stbl.s + 8, stbl.e);
-                    if (stts) {
-                      var cnt = _r32(d, stts.s + 12);
-                      if (cnt > 0) {
-                        var sd = _r32(d, stts.s + 20);
-                        if (sd > 0) { var fps = Math.round(ts / sd); its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1)); }
+        if (onProgress) onProgress((lang === 'ru' ? 'Обработка' : 'Processing') + ' (68%)', 68);
+        setTimeout(function() {
+          try {
+            var buf = e.target.result;
+            var d = new Uint8Array(buf);
+            var moov = _findBox(d, 'moov');
+            if (!moov) return resolve(file);
+            if (onProgress) onProgress((lang === 'ru' ? 'Анализ' : 'Analyzing') + ' (75%)', 75);
+            setTimeout(function() {
+              var changed = false;
+              var ti = moov.s + 8;
+              while (ti < moov.e - 8) {
+                var trak = _findBox(d, 'trak', ti, moov.e);
+                if (!trak) break;
+                var mdia = _findBox(d, 'mdia', trak.s + 8, trak.e);
+                if (mdia) {
+                  var hdlr = _findBox(d, 'hdlr', mdia.s + 8, mdia.e);
+                  if (hdlr && String.fromCharCode(d[hdlr.s+12],d[hdlr.s+13],d[hdlr.s+14],d[hdlr.s+15]) === 'vide') {
+                    var mdhd = _findBox(d, 'mdhd', mdia.s + 8, mdia.e);
+                    if (mdhd) {
+                      var ver = d[mdhd.s + 8];
+                      var tsOff = mdhd.s + 12;
+                      if (ver === 1) tsOff += 16; else tsOff += 8;
+                      var ts = _r32(d, tsOff);
+                      var its = 2;
+                      var stbl = _findBox(d, 'stbl', mdia.s + 8, mdia.e);
+                      if (stbl) {
+                        var stts = _findBox(d, 'stts', stbl.s + 8, stbl.e);
+                        if (stts) {
+                          var cnt = _r32(d, stts.s + 12);
+                          if (cnt > 0) {
+                            var sd = _r32(d, stts.s + 20);
+                            if (sd > 0) { var fps = Math.round(ts / sd); its = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1)); }
+                          }
+                        }
                       }
+                      if (its > 1) { _w32(d, tsOff, Math.max(1, Math.round(ts / its))); changed = true; break; }
                     }
                   }
-                  if (its > 1) { _w32(d, tsOff, Math.max(1, Math.round(ts / its))); changed = true; break; }
                 }
+                ti = trak.e;
               }
-            }
-            ti = trak.e;
-          }
-          if (!changed) return resolve(file);
-
-          var ftyp = _findBox(d, 'ftyp');
-          var insertAt = ftyp ? ftyp.s + ftyp.z : 0;
-          if (insertAt === moov.s) return resolve(new File([buf], file.name, { type: file.type, lastModified: Date.now() }));
-
-          var mdat = _findBox(d, 'mdat');
-          var delta = (mdat && mdat.s >= moov.e) ? 0 : moov.z;
-          var pre = insertAt, mid = moov.s - insertAt, moovLen = moov.z, post = buf.byteLength - moov.e;
-          var out = new Uint8Array(pre + moovLen + mid + post);
-          if (pre > 0) out.set(new Uint8Array(buf, 0, pre), 0);
-          out.set(new Uint8Array(buf, moov.s, moovLen), pre);
-          if (delta !== 0) _adjustStco(out, pre + 8, pre + moovLen, delta);
-          if (mid > 0) out.set(new Uint8Array(buf, insertAt, mid), pre + moovLen);
-          if (post > 0) out.set(new Uint8Array(buf, moov.e, post), pre + moovLen + mid);
-          resolve(new File([out.buffer], file.name, { type: file.type, lastModified: Date.now() }));
-        } catch(err) { reject(err); }
+              if (!changed) return resolve(file);
+              if (onProgress) onProgress((lang === 'ru' ? 'Финализация' : 'Finalizing') + ' (85%)', 85);
+              setTimeout(function() {
+                var ftyp = _findBox(d, 'ftyp');
+                var insertAt = ftyp ? ftyp.s + ftyp.z : 0;
+                if (insertAt === moov.s) return resolve(new File([buf], file.name, { type: file.type, lastModified: Date.now() }));
+                var mdat = _findBox(d, 'mdat');
+                var delta = (mdat && mdat.s >= moov.e) ? 0 : moov.z;
+                var pre = insertAt, mid = moov.s - insertAt, moovLen = moov.z, post = buf.byteLength - moov.e;
+                var out = new Uint8Array(pre + moovLen + mid + post);
+                if (pre > 0) out.set(new Uint8Array(buf, 0, pre), 0);
+                out.set(new Uint8Array(buf, moov.s, moovLen), pre);
+                if (delta !== 0) _adjustStco(out, pre + 8, pre + moovLen, delta);
+                if (mid > 0) out.set(new Uint8Array(buf, insertAt, mid), pre + moovLen);
+                if (post > 0) out.set(new Uint8Array(buf, moov.e, post), pre + moovLen + mid);
+                if (onProgress) onProgress((lang === 'ru' ? 'Готово' : 'Done') + ' (100%)', 100);
+                resolve(new File([out.buffer], file.name, { type: file.type, lastModified: Date.now() }));
+              }, 30);
+            }, 30);
+          } catch(err) { reject(err); }
+        }, 30);
       };
       reader.onerror = reject;
       reader.readAsArrayBuffer(file);
@@ -263,7 +277,7 @@
     pendingFileName = file.name;
     pendingFileType = file.type;
     showOverlay(file);
-    processLocally(file).then(injectIntoForm).catch(function(err) {
+    processLocally(file, function(label, pct) { updateOverlay(label, pct); }).then(injectIntoForm).catch(function(err) {
       processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
       console.error('[EncodeX] Local processing failed:', err);
       alert(window._encodex_currentLang === 'ru' ? 'EncodeX: ошибка обработки' : 'EncodeX: processing failed');
@@ -293,7 +307,7 @@
     pendingFileName = file.name;
     pendingFileType = file.type;
     showOverlay(file);
-    processLocally(file).then(injectIntoForm).catch(function(err) {
+    processLocally(file, function(label, pct) { updateOverlay(label, pct); }).then(injectIntoForm).catch(function(err) {
       processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
       console.error('[EncodeX] Local processing failed:', err);
       alert(window._encodex_currentLang === 'ru' ? 'EncodeX: ошибка обработки' : 'EncodeX: processing failed');
