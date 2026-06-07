@@ -560,9 +560,10 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     console.log('[EncodeX] ffmpeg done, size:', fs.statSync(outputPath).size);
     // ffprobe diagnostics
     try {
-      const probe = spawn(ffmpegPath.replace('ffmpeg', 'ffprobe'), ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', '-show_entries', 'format=format_name,duration,size:stream=codec_name,codec_type,width,height,r_frame_rate', outputPath]);
+      const probe = spawn(ffprobePath, ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', '-show_entries', 'format=format_name,duration,size:stream=codec_name,codec_type,width,height,r_frame_rate', outputPath]);
       let probeOut = '';
       probe.stdout.on('data', d => probeOut += d.toString());
+      probe.on('error', pe => { console.log('[EncodeX] ffprobe spawn error:', pe.message); });
       probe.on('close', () => { console.log('[EncodeX] ffprobe:', probeOut.substring(0, 2000)); });
     } catch (pe) { console.log('[EncodeX] ffprobe failed:', pe.message); }
 
