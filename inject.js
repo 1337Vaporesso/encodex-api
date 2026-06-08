@@ -225,6 +225,24 @@
   document.addEventListener('change', interceptFileInput, true);
   document.addEventListener('input', interceptFileInput, true);
 
+  // Also attach directly to any file inputs already in DOM or added later (TikTok shadow DOM workaround)
+  function attachToInput(el) {
+    if (el.tagName === 'INPUT' && el.type === 'file' && !el._encodexHooked) {
+      el._encodexHooked = true;
+      el.addEventListener('change', interceptFileInput, true);
+    }
+  }
+  document.querySelectorAll('input[type=file]').forEach(attachToInput);
+  new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      m.addedNodes.forEach(function(node) {
+        if (node.nodeType !== 1) return;
+        if (node.tagName === 'INPUT' && node.type === 'file') attachToInput(node);
+        node.querySelectorAll && node.querySelectorAll('input[type=file]').forEach(attachToInput);
+      });
+    });
+  }).observe(document.body || document.documentElement, { childList: true, subtree: true });
+
   // Listen for state changes from popup
   window.addEventListener('EncodeXState', function(e) {
     if (e.detail) {
