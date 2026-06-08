@@ -52,6 +52,33 @@
     if (el) el.remove();
   }
 
+  function showToast(seconds) {
+    var existing = document.getElementById('encodex-toast');
+    if (existing) existing.remove();
+    var lang = window._encodex_currentLang === 'ru';
+    var msg = lang
+      ? '✅ HQ Upload: файл обработан за ' + seconds + ' сек'
+      : '✅ HQ Upload: processed in ' + seconds + 's';
+    var toast = document.createElement('div');
+    toast.id = 'encodex-toast';
+    toast.textContent = msg;
+    toast.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);'
+      + 'background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;font-family:Inter,sans-serif;'
+      + 'font-size:13px;font-weight:600;padding:10px 20px;border-radius:24px;z-index:9999999;'
+      + 'border:1px solid rgba(139,92,246,0.5);box-shadow:0 4px 24px rgba(139,92,246,0.25);'
+      + 'opacity:0;transition:opacity 0.3s,transform 0.3s;pointer-events:none;';
+    document.body.appendChild(toast);
+    requestAnimationFrame(function() {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateX(-50%) translateY(0)';
+    });
+    setTimeout(function() {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(-50%) translateY(20px)';
+      setTimeout(function() { if (toast.parentNode) toast.remove(); }, 400);
+    }, 3000);
+  }
+
   function allocateJob(fileSize) {
     return new Promise(function(resolve, reject) {
       var xhr = new XMLHttpRequest();
@@ -173,9 +200,11 @@
       var dt = new DataTransfer();
       dt.items.add(newFile);
       processing = false;
+      var elapsed = Math.round((Date.now() - _startTime) / 1000);
       updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
       setTimeout(function() {
         removeOverlay();
+        showToast(elapsed);
         input.files = dt.files;
         input.dispatchEvent(new Event('change', { bubbles: true }));
       }, 800);
