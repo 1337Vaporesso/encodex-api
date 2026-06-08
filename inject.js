@@ -52,28 +52,44 @@
     if (el) el.remove();
   }
 
-  function uploadFile(file) {
+  function allocateJob(fileSize) {
     return new Promise(function(resolve, reject) {
-      const fd = new FormData();
-      fd.append('video', file);
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', SERVER + '/api/process/upload');
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', SERVER + '/api/process/allocate');
+      xhr.setRequestHeader('Content-Type', 'application/json');
       xhr.setRequestHeader('Authorization', 'Bearer ' + getToken());
+      xhr.onload = function() {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          if (data.ok) resolve(data);
+          else reject(new Error(data.error || 'Allocate failed'));
+        } catch (e) { reject(new Error('Invalid response')); }
+      };
+      xhr.onerror = function() { reject(new Error('Network error')); };
+      xhr.send(JSON.stringify({ file_size: fileSize }));
+    });
+  }
+
+  function uploadFile(file, uploadToken) {
+    return new Promise(function(resolve, reject) {
+      var fd = new FormData();
+      fd.append('video', file);
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', SERVER + '/api/process/upload');
+      xhr.setRequestHeader('Authorization', 'Bearer ' + uploadToken);
       xhr.upload.onprogress = function(e) {
         if (e.lengthComputable) {
-          const pct = Math.round((e.loaded / e.total) * 100);
-          const label = (window._encodex_currentLang === 'ru' ? 'Загрузка' : 'Uploading') + ' (' + pct + '%)';
+          var pct = Math.round(20 + (e.loaded / e.total) * 40);
+          var label = (window._encodex_currentLang === 'ru' ? 'Загрузка' : 'Uploading') + ' (' + Math.round((e.loaded / e.total) * 100) + '%)';
           updateOverlay(label, pct);
         }
       };
       xhr.onload = function() {
         try {
-          const data = JSON.parse(xhr.responseText);
+          var data = JSON.parse(xhr.responseText);
           if (data.ok) resolve(data);
           else reject(new Error(data.error || 'Upload failed'));
-        } catch (e) {
-          reject(new Error('Invalid response'));
-        }
+        } catch (e) { reject(new Error('Invalid response')); }
       };
       xhr.onerror = function() { reject(new Error('Network error')); };
       xhr.send(fd);
@@ -82,51 +98,40 @@
 
   function pollStatus(jobId) {
     return new Promise(function(resolve, reject) {
+      var attempts = 0;
       (function poll() {
         var label = window._encodex_currentLang === 'ru' ? 'Обработка FFmpeg...' : 'FFmpeg processing...';
-        updateOverlay(label, 50);
-
+        updateOverlay(label, Math.min(85, 60 + attempts));
         var xhr = new XMLHttpRequest();
-        xhr.open('GET', SERVER + '/api/process/status/' + jobId);
-        xhr.setRequestHeader('Authorization', 'Bearer ' + getToken());
+        xhr.open('GET', SERVER + '/api/process/status?job_id=' + jobId);
         xhr.onload = function() {
           try {
             var data = JSON.parse(xhr.responseText);
-            if (data.ok && data.status === 'done') resolve(jobId);
-            else if (data.ok && data.status === 'error') reject(new Error('Processing failed'));
-            else setTimeout(poll, 1500);
-          } catch (e) { setTimeout(poll, 1500); }
+            if (data.ok && data.status === 200) resolve();
+            else if (data.ok && data.status >= 400) reject(new Error('FFmpeg error: ' + (data.error || data.status)));
+            else { attempts++; if (attempts > 180) return reject(new Error('Timeout')); setTimeout(poll, 2000); }
+          } catch (e) { attempts++; setTimeout(poll, 2000); }
         };
-        xhr.onerror = function() { setTimeout(poll, 1500); };
+        xhr.onerror = function() { attempts++; setTimeout(poll, 2000); };
         xhr.send();
       })();
     });
   }
 
-  function downloadResult(jobId) {
+  function downloadResult(jobId, uploadToken) {
     return new Promise(function(resolve, reject) {
       var label = window._encodex_currentLang === 'ru' ? 'Скачивание...' : 'Downloading...';
-      updateOverlay(label, 80);
-
+      updateOverlay(label, 90);
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', SERVER + '/api/process/result/' + jobId);
-      xhr.setRequestHeader('Authorization', 'Bearer ' + getToken());
+      xhr.open('GET', SERVER + '/api/process/result?job_id=' + jobId + '&token=' + uploadToken);
       xhr.responseType = 'blob';
       xhr.onload = function() {
         if (xhr.status === 200) resolve(xhr.response);
-        else reject(new Error('Download failed'));
+        else reject(new Error('Download failed: ' + xhr.status));
       };
       xhr.onerror = function() { reject(new Error('Network error')); };
       xhr.send();
     });
-  }
-
-  function commitJob(jobId) {
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', SERVER + '/api/process/commit');
-    xhr.setRequestHeader('Content-Type', 'application/json');
-    xhr.setRequestHeader('Authorization', 'Bearer ' + getToken());
-    xhr.send(JSON.stringify({ jobId: jobId }));
   }
 
   // Intercept file input changes (capture phase)
@@ -150,22 +155,30 @@
     e.stopImmediatePropagation();
     processing = true;
     showOverlay(file);
+    updateOverlay(window._encodex_currentLang === 'ru' ? 'Подготовка...' : 'Preparing...', 10);
 
-    uploadFile(file).then(function(result) {
-      return pollStatus(result.jobId);
-    }).then(function(jobId) {
-      return downloadResult(jobId).then(function(blob) {
-        return { jobId: jobId, blob: blob };
-      });
-    }).then(function(result) {
-      var newFile = new File([result.blob], file.name, { type: file.type });
+    var _uploadToken = null;
+    var _jobId = null;
+
+    allocateJob(file.size).then(function(alloc) {
+      _uploadToken = alloc.upload_token;
+      _jobId = alloc.job_id;
+      return uploadFile(file, _uploadToken);
+    }).then(function() {
+      return pollStatus(_jobId);
+    }).then(function() {
+      return downloadResult(_jobId, _uploadToken);
+    }).then(function(blob) {
+      var newFile = new File([blob], file.name, { type: 'video/mp4' });
       var dt = new DataTransfer();
       dt.items.add(newFile);
-      input.files = dt.files;
       processing = false;
-      removeOverlay();
-      commitJob(result.jobId);
-      input.dispatchEvent(new Event('change', { bubbles: true }));
+      updateOverlay(window._encodex_currentLang === 'ru' ? 'Готово!' : 'Done!', 100);
+      setTimeout(function() {
+        removeOverlay();
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }, 800);
     }).catch(function(err) {
       console.error('[EncodeX] HQ Upload error:', err);
       processing = false;
