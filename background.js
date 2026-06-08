@@ -1,38 +1,5 @@
 // Background Service Worker for EncodeX
 
-// Chunked download handler: SW fetches file, sends 64KB chunks via port
-chrome.runtime.onConnect.addListener(function(port) {
-  if (port.name && port.name.startsWith('download-')) {
-    port.onMessage.addListener(function(msg) {
-      if (msg.action === 'DOWNLOAD_CHUNKED') {
-        var controller = new AbortController();
-        var t = setTimeout(function() { controller.abort(); port.postMessage({ type: 'error', error: 'Timeout' }); }, 600000);
-        fetch(msg.url)
-          .then(function(res) {
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            return res.arrayBuffer();
-          })
-          .then(function(buf) {
-            clearTimeout(t);
-            var CHUNK_SIZE = 65536;
-            var total = buf.byteLength;
-
-            for (var offset = 0; offset < total; offset += CHUNK_SIZE) {
-              var end = Math.min(offset + CHUNK_SIZE, total);
-              var chunk = buf.slice(offset, end);
-              port.postMessage({ type: 'chunk', data: chunk }, [chunk]);
-            }
-            port.postMessage({ type: 'done', totalSize: total });
-          })
-          .catch(function(e) {
-            clearTimeout(t);
-            port.postMessage({ type: 'error', error: e.message });
-          });
-      }
-    });
-  }
-});
-
 // Helper to safely check response status and JSON content-type
 function handleJsonResponse(res) {
   if (!res.ok) {
