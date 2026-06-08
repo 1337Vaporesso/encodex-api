@@ -6,6 +6,7 @@
 
   window._encodex_hqEnabled = false;
   window._encodex_currentLang = 'ru';
+  window._encodex_fps = 'auto';
 
   function getToken() {
     if (token) return token;
@@ -249,7 +250,12 @@
       hqEnabled = !!(e.detail.isActive && e.detail.isPremium);
       window._encodex_hqEnabled = hqEnabled;
       if (e.detail.lang) window._encodex_currentLang = e.detail.lang;
-      if (e.detail.token) token = e.detail.token;
+      if (e.detail.token) {
+        token = e.detail.token;
+        window._encodex_token = e.detail.token;
+      }
+      if (e.detail.fps) window._encodex_fps = e.detail.fps;
+      if (e.detail.api) window._encodex_api = e.detail.api;
     }
   });
 

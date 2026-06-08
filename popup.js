@@ -459,20 +459,24 @@ async function syncHqStateToTab(isActive) {
 
   if (isTikTok) {
     var settings = await new Promise(function(resolve) {
-      chrome.storage.local.get(["encodex_premium", "encodex_user", "encodex_token"], resolve);
+      chrome.storage.local.get(["encodex_premium", "encodex_user", "encodex_token", "encodex_fps"], resolve);
     });
     var isPremium = !!(settings.encodex_premium || (settings.encodex_user && settings.encodex_user.loggedIn && settings.encodex_user.role === "Owner"));
     var finalActive = isPremium ? isActive : false;
+    var fpsVal = settings.encodex_fps || "auto";
 
     chrome.scripting.executeScript({
       target: { tabId: tab.id },
       world: "MAIN",
-      args: [currentLang, finalActive, isPremium, settings.encodex_token || null],
-      func: function(lang, state, premium, token) {
+      args: [currentLang, finalActive, isPremium, settings.encodex_token || null, fpsVal, API],
+      func: function(lang, state, premium, token, fps, api) {
         window._encodex_hasPremium = premium;
         window._encodex_currentLang = lang;
+        window._encodex_fps = fps;
+        window._encodex_token = token;
+        window._encodex_api = api;
         window.dispatchEvent(new CustomEvent("EncodeXState", {
-          detail: { lang: lang, isActive: state, isPremium: premium, token: token }
+          detail: { lang: lang, isActive: state, isPremium: premium, token: token, fps: fps, api: api }
         }));
       }
     }).catch(function(err) { console.log("Tab scripting bypassed:", err); });
