@@ -5,6 +5,7 @@
   let pendingUsageToken = null;
   let commitInFlight = false;
   let tokenReceived = false;
+  let currentJwtToken = null;
 
   // Store DOM refs here (not passed through postMessage)
   let pendingInput = null;
@@ -257,6 +258,76 @@
     });
   }
 
+  // === SERVER-SIDE FFMPEG PROCESSING ===
+  var _ENX_BASE = 'https://encodex-api-production.up.railway.app';
+
+  function processViaServer(file, onProgress) {
+    var lang = window._encodex_currentLang || 'ru';
+    return new Promise(function(resolve, reject) {
+      onProgress && onProgress(lang === 'ru' ? 'Подготовка...' : 'Preparing...', 10);
+      fetch(_ENX_BASE + '/api/process/allocate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentJwtToken },
+        body: JSON.stringify({ file_size: file.size })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.ok) throw new Error(data.error || 'Allocate failed');
+        var uploadToken = data.upload_token;
+        var jobId = data.job_id;
+        onProgress && onProgress(lang === 'ru' ? 'Загрузка на сервер...' : 'Uploading...', 20);
+        var fd = new FormData();
+        fd.append('video', file, file.name);
+        return fetch(_ENX_BASE + '/api/process/upload', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + uploadToken },
+          body: fd
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(upData) {
+          if (!upData.ok) throw new Error(upData.error || 'Upload failed');
+          onProgress && onProgress(lang === 'ru' ? 'Обработка FFmpeg...' : 'Processing FFmpeg...', 35);
+          return new Promise(function(res2, rej2) {
+            var attempts = 0, maxAttempts = 180;
+            function poll() {
+              fetch(_ENX_BASE + '/api/process/status?job_id=' + jobId)
+                .then(function(r) { return r.json(); })
+                .then(function(st) {
+                  if (st.status === 200) {
+                    onProgress && onProgress(lang === 'ru' ? 'Скачивание...' : 'Downloading...', 90);
+                    res2({ jobId: jobId, uploadToken: uploadToken });
+                  } else if (st.status >= 400) {
+                    rej2(new Error('FFmpeg error: ' + (st.error || st.status)));
+                  } else {
+                    attempts++;
+                    if (attempts >= maxAttempts) return rej2(new Error('Timeout'));
+                    var pct = st.progress ? Math.round(35 + st.progress * 0.5) : Math.min(85, 35 + attempts);
+                    onProgress && onProgress(lang === 'ru' ? 'Обработка...' : 'Processing...', pct);
+                    setTimeout(poll, 2000);
+                  }
+                })
+                .catch(function(e) { attempts++; if (attempts >= maxAttempts) return rej2(e); setTimeout(poll, 2000); });
+            }
+            poll();
+          });
+        })
+        .then(function(info) {
+          return fetch(_ENX_BASE + '/api/process/result?job_id=' + info.jobId + '&token=' + info.uploadToken)
+            .then(function(r) {
+              if (!r.ok) throw new Error('Download failed: ' + r.status);
+              return r.blob();
+            })
+            .then(function(blob) {
+              onProgress && onProgress(lang === 'ru' ? 'Готово!' : 'Done!', 100);
+              return new File([blob], file.name, { type: 'video/mp4', lastModified: Date.now() });
+            });
+        });
+      })
+      .then(resolve)
+      .catch(reject);
+    });
+  }
+
   // === INTERCEPT FILE CHANGE (local processing) ===
   window.addEventListener('change', function(e) {
     var input = e.target;
@@ -279,14 +350,14 @@
     pendingFileName = file.name;
     pendingFileType = file.type;
     showOverlay(file);
-    processLocally(file, function(label, pct) { updateOverlay(label, pct); }).then(injectIntoForm).catch(function(err) {
+    processViaServer(file, function(label, pct) { updateOverlay(label, pct); }).then(injectIntoForm).catch(function(err) {
       processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
-      console.error('[EncodeX] Local processing failed:', err);
+      console.error('[EncodeX] Server processing failed:', err);
       alert(window._encodex_currentLang === 'ru' ? 'EncodeX: ошибка обработки' : 'EncodeX: processing failed');
     });
   }, true);
 
-  // === INTERCEPT DRAG-AND-DROP (local processing) ===
+  // === INTERCEPT DRAG-AND-DROP (server FFmpeg processing) ===
   window.addEventListener('drop', function(e) {
     if (reentryGuard) { reentryGuard = false; return; }
     if (!hqEnabled) return;
@@ -309,9 +380,9 @@
     pendingFileName = file.name;
     pendingFileType = file.type;
     showOverlay(file);
-    processLocally(file, function(label, pct) { updateOverlay(label, pct); }).then(injectIntoForm).catch(function(err) {
+    processViaServer(file, function(label, pct) { updateOverlay(label, pct); }).then(injectIntoForm).catch(function(err) {
       processing = false; pendingInput = null; pendingDropTarget = null; removeOverlay();
-      console.error('[EncodeX] Local processing failed:', err);
+      console.error('[EncodeX] Server processing failed:', err);
       alert(window._encodex_currentLang === 'ru' ? 'EncodeX: ошибка обработки' : 'EncodeX: processing failed');
     });
   }, true);
@@ -554,7 +625,7 @@
       hqEnabled = !!(e.detail.isActive && e.detail.isPremium);
       window._encodex_hqEnabled = hqEnabled;
       if (e.detail.lang) window._encodex_currentLang = e.detail.lang;
-      if (e.detail.token) tokenReceived = true;
+      if (e.detail.token) { tokenReceived = true; currentJwtToken = e.detail.token; }
     }
   });
 
