@@ -36,6 +36,16 @@
       --card-bg: rgba(255,255,255,0.05); --card-border: rgba(245,158,11,0.1);
     }
     body.theme-stealth-blue, body.theme-mint-glow, body.theme-amber-core, body.theme-midnight-black {}
+    @keyframes premium-pulse {
+      0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(251,191,36,0.6); }
+      50% { transform: scale(1.2); opacity: 0.9; box-shadow: 0 0 0 4px rgba(251,191,36,0); }
+    }
+    .premium-dot {
+      width: 5px; height: 5px; border-radius: 50%;
+      background: #fbbf24; flex-shrink: 0;
+      animation: premium-pulse 1.8s ease-in-out infinite;
+      box-shadow: 0 0 4px rgba(251,191,36,0.8);
+    }
     ::-webkit-scrollbar { width: 3px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.4); border-radius: 3px; }
@@ -345,6 +355,7 @@
           <div style="display: flex; align-items: center; gap: 4px;">
             <span class="header-username" id="headerUsername">Guest</span>
             <span id="headerPremiumBadge" class="hidden" style="font-family: 'Rajdhani', sans-serif; font-size: 8px; font-weight: 800; color: #fbbf24; border: 1px solid #fbbf24; padding: 1px 3px; border-radius: 4px; text-shadow: 0 0 4px rgba(251, 191, 36, 0.4); letter-spacing: 0.5px; line-height: 1;">PREMIUM</span>
+            <span id="premiumPulseDot" class="premium-dot hidden"></span>
           </div>
           <span class="header-sub" id="headerUserRole">Not logged in</span>
         </div>

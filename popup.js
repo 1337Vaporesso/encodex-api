@@ -15,6 +15,7 @@ function updatePremiumUI(isPremium) {
   var premiumKeyCard = document.getElementById("premiumKeyCard");
   var premiumActiveCard = document.getElementById("premiumActiveCard");
   var headerPremiumBadge = document.getElementById("headerPremiumBadge");
+  var premiumPulseDot = document.getElementById("premiumPulseDot");
   var keyInput = document.getElementById("premiumKeyInput");
   var activateBtn = document.getElementById("activatePremiumBtn");
   var statusText = document.getElementById("premiumCardStatusText");
@@ -23,10 +24,12 @@ function updatePremiumUI(isPremium) {
     if (premiumKeyCard) premiumKeyCard.classList.add("hidden");
     if (premiumActiveCard) premiumActiveCard.classList.remove("hidden");
     if (headerPremiumBadge) headerPremiumBadge.classList.remove("hidden");
+    if (premiumPulseDot) premiumPulseDot.classList.remove("hidden");
   } else {
     if (premiumActiveCard) premiumActiveCard.classList.add("hidden");
     if (premiumKeyCard) premiumKeyCard.classList.remove("hidden");
     if (headerPremiumBadge) headerPremiumBadge.classList.add("hidden");
+    if (premiumPulseDot) premiumPulseDot.classList.add("hidden");
     chrome.storage.local.get("encodex_user", function(res) {
       var loggedIn = res.encodex_user && res.encodex_user.loggedIn;
       if (keyInput) keyInput.disabled = !loggedIn;
