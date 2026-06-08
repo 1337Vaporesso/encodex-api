@@ -71,13 +71,14 @@ function addBadgeToPage() {
     badge.addEventListener("click", function() { if (badge.classList.contains("minimized")) toggleMinimize(); });
 
     setTimeout(function() {
-      chrome.storage.local.get(["encodex_token"], function(tokenData) {
+      chrome.storage.local.get(["encodex_token", "encodex_fps"], function(tokenData) {
         window.dispatchEvent(new CustomEvent("EncodeXState", {
           detail: {
             lang: lang,
             isActive: isActive,
             isPremium: isPremium,
-            token: tokenData.encodex_token || null
+            token: tokenData.encodex_token || null,
+            fps: tokenData.encodex_fps || "auto"
           }
         }));
       });
@@ -378,7 +379,7 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
 // Storage listener
 chrome.storage.onChanged.addListener(function(changes, areaName) {
   if (areaName === "local") {
-    chrome.storage.local.get(["theme", "lang", "encodex_active", "encodex_premium", "encodex_user", "encodex_token"], function(data) {
+    chrome.storage.local.get(["theme", "lang", "encodex_active", "encodex_premium", "encodex_user", "encodex_token", "encodex_fps"], function(data) {
       var theme = data.theme || "midnight-black";
       var lang = data.lang || "ru";
       var isPremium = data.encodex_premium || (data.encodex_user && data.encodex_user.loggedIn && data.encodex_user.role === "Owner");
@@ -415,12 +416,81 @@ chrome.storage.onChanged.addListener(function(changes, areaName) {
           lang: lang,
           isActive: isActive,
           isPremium: isPremium,
-          token: data.encodex_token || null
+          token: data.encodex_token || null,
+          fps: data.encodex_fps || "auto"
         }
       }));
     });
   }
 });
+
+// === Message bridge: inject.js → content.js network calls (bypass CSP) ===
+const SERVER = 'https://encodex-api-production.up.railway.app';
+
+function getTokenFromStorage() {
+  return new Promise(function(resolve) {
+    try {
+      chrome.storage.local.get(['encodex_token'], function(data) {
+        resolve(data && data.encodex_token ? data.encodex_token : null);
+      });
+    } catch(e) {
+      // Extension context invalidated (reloaded/updated) - inject.js will show login prompt
+      console.warn('[EncodeX] storage unavailable:', e.message);
+      resolve(null);
+    }
+  });
+}
+
+// Re-read token when storage changes (e.g. after re-login)
+chrome.storage.onChanged.addListener(function(changes, area) {
+  if (area === 'local' && changes.encodex_token) {
+    window.dispatchEvent(new CustomEvent('EncodeXState', {
+      detail: { token: changes.encodex_token.newValue || null }
+    }));
+  }
+});
+
+window.addEventListener('message', function(event) {
+  if (!event.data || event.data.source !== 'encodex-inject') return;
+  var msg = event.data;
+  var payload = msg.payload || {};
+
+  switch (msg.type) {
+    case 'TRANSFORM': {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', SERVER + '/api/transform');
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.timeout = 10000;
+      xhr.onload = function() {
+        try {
+          var d = JSON.parse(xhr.responseText);
+          respond('TRANSFORM_RESULT', { body: d.body || null, _tid: payload._tid });
+        } catch(e) { respond('TRANSFORM_RESULT', { body: null, _tid: payload._tid }); }
+      };
+      xhr.onerror = function() { respond('TRANSFORM_RESULT', { body: null, _tid: payload._tid }); };
+      xhr.ontimeout = function() { respond('TRANSFORM_RESULT', { body: null, _tid: payload._tid }); };
+      xhr.send(JSON.stringify({ body: payload.body, url: payload.url }));
+      break;
+    }
+
+    case 'COMMIT': {
+      getTokenFromStorage().then(function(token) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', SERVER + '/api/process/commit');
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+        xhr.onload = function() { respond('COMMIT_RESULT', {}); };
+        xhr.onerror = function() { respond('COMMIT_RESULT', {}); };
+        xhr.send(JSON.stringify({ token: payload.usageToken }));
+      });
+      break;
+    }
+  }
+});
+
+function respond(type, payload) {
+  window.postMessage({ source: 'encodex-content', type: type, payload: payload }, '*');
+}
 
 // Initialization
 function initApp() {
