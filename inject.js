@@ -161,10 +161,12 @@
     });
   }
 
-  // Intercept file input changes (capture phase)
-  document.addEventListener('change', function(e) {
+  var _reinjecting = false;
+
+  function interceptFileInput(e) {
     var input = e.target;
     if (input.tagName !== 'INPUT' || input.type !== 'file') return;
+    if (_reinjecting) return;
     if (processing) return;
     if (!hqEnabled) return;
     if (!input.files || !input.files[0]) return;
@@ -205,8 +207,11 @@
       setTimeout(function() {
         removeOverlay();
         showToast(elapsed);
+        _reinjecting = true;
         input.files = dt.files;
         input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        setTimeout(function() { _reinjecting = false; }, 200);
       }, 800);
     }).catch(function(err) {
       console.error('[EncodeX] HQ Upload error:', err);
@@ -215,7 +220,10 @@
       var msg = window._encodex_currentLang === 'ru' ? 'Ошибка HQ Upload: ' : 'HQ Upload error: ';
       alert(msg + err.message);
     });
-  }, true);
+  }
+
+  document.addEventListener('change', interceptFileInput, true);
+  document.addEventListener('input', interceptFileInput, true);
 
   // Listen for state changes from popup
   window.addEventListener('EncodeXState', function(e) {
