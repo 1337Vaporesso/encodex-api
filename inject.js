@@ -89,7 +89,7 @@
           clearTimeout(timeout);
           window.removeEventListener('message', handler);
           if (e.data.error) reject(new Error(e.data.error));
-          else resolve(e.data.result);
+          else resolve(e.data.payload);
         }
       }
       window.addEventListener('message', handler);
