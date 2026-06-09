@@ -533,16 +533,23 @@ window.addEventListener('message', function(event) {
     }
 
     case 'JOB_DOWNLOAD': {
+      var url = SERVER + '/api/process/result?job_id=' + payload.job_id + '&token=' + payload.upload_token;
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', SERVER + '/api/process/result?job_id=' + payload.job_id + '&token=' + payload.upload_token);
-      xhr.responseType = 'arraybuffer';
+      xhr.open('GET', url);
+      xhr.responseType = 'blob';
       xhr.onload = function() {
-        if (xhr.status === 200) {
-          var blob = new Blob([xhr.response], { type: 'video/mp4' });
-          respond(blob);
-        } else respond(null, 'Download failed: ' + xhr.status);
+        console.log('[EncodeX] download xhr status:', xhr.status, 'type:', xhr.response ? xhr.response.type : 'none', 'size:', xhr.response ? xhr.response.size : 0);
+        if (xhr.status === 200 && xhr.response) {
+          respond(xhr.response);
+        } else if (xhr.status === 200) {
+          respond(null, 'Download empty response');
+        } else {
+          respond(null, 'Download failed: ' + xhr.status + ' ' + xhr.statusText);
+        }
       };
-      xhr.onerror = function() { respond(null, 'Network error on download'); };
+      xhr.onerror = function() { console.log('[EncodeX] download xhr onerror'); respond(null, 'Network error on download'); };
+      xhr.onabort = function() { console.log('[EncodeX] download xhr onabort'); respond(null, 'Download aborted'); };
+      xhr.ontimeout = function() { console.log('[EncodeX] download xhr ontimeout'); respond(null, 'Download timeout'); };
       xhr.send();
       break;
     }
