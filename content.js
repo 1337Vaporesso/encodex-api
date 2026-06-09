@@ -471,12 +471,80 @@ chrome.storage.onChanged.addListener(function(changes, area) {
   }
 });
 
+function postMessageResult(type, payload, id, error) {
+  window.postMessage({ source: 'encodex-content', type: type, payload: payload, id: id, error: error }, '*');
+}
+
 window.addEventListener('message', function(event) {
   if (!event.data || event.data.source !== 'encodex-inject') return;
   var msg = event.data;
   var payload = msg.payload || {};
+  var id = msg.id;
+
+  function respond(result, err) {
+    postMessageResult(msg.type + '_RESULT', result, id, err ? (err.message || err) : null);
+  }
 
   switch (msg.type) {
+    case 'JOB_ALLOCATE': {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', SERVER + '/api/process/allocate');
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('Authorization', 'Bearer ' + (payload._token || ''));
+      xhr.onload = function() {
+        try { respond(JSON.parse(xhr.responseText)); }
+        catch(e) { respond(null, 'Invalid response from allocate'); }
+      };
+      xhr.onerror = function() { respond(null, 'Network error on allocate'); };
+      xhr.send(JSON.stringify({ file_size: payload.file_size }));
+      break;
+    }
+
+    case 'JOB_UPLOAD': {
+      var fd = new FormData();
+      fd.append('video', payload.file);
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', SERVER + '/api/process/upload');
+      xhr.setRequestHeader('Authorization', 'Bearer ' + payload.upload_token);
+      xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+          window.postMessage({ source: 'encodex-content', type: 'UPLOAD_PROGRESS', payload: { loaded: e.loaded, total: e.total }, id: id }, '*');
+        }
+      };
+      xhr.onload = function() {
+        try { respond(JSON.parse(xhr.responseText)); }
+        catch(e) { respond(null, 'Invalid response from upload'); }
+      };
+      xhr.onerror = function() { respond(null, 'Network error on upload'); };
+      xhr.send(fd);
+      break;
+    }
+
+    case 'JOB_POLL': {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', SERVER + '/api/process/status?job_id=' + payload.job_id);
+      xhr.onload = function() {
+        try { respond(JSON.parse(xhr.responseText)); }
+        catch(e) { respond(null, 'Invalid response from poll'); }
+      };
+      xhr.onerror = function() { respond(null, 'Network error on poll'); };
+      xhr.send();
+      break;
+    }
+
+    case 'JOB_DOWNLOAD': {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', SERVER + '/api/process/result?job_id=' + payload.job_id + '&token=' + payload.upload_token);
+      xhr.responseType = 'blob';
+      xhr.onload = function() {
+        if (xhr.status === 200) respond(xhr.response);
+        else respond(null, 'Download failed: ' + xhr.status);
+      };
+      xhr.onerror = function() { respond(null, 'Network error on download'); };
+      xhr.send();
+      break;
+    }
+
     case 'TRANSFORM': {
       var xhr = new XMLHttpRequest();
       xhr.open('POST', SERVER + '/api/transform');
@@ -485,11 +553,11 @@ window.addEventListener('message', function(event) {
       xhr.onload = function() {
         try {
           var d = JSON.parse(xhr.responseText);
-          respond('TRANSFORM_RESULT', { body: d.body || null, _tid: payload._tid });
-        } catch(e) { respond('TRANSFORM_RESULT', { body: null, _tid: payload._tid }); }
+          respond({ body: d.body || null, _tid: payload._tid });
+        } catch(e) { respond({ body: null, _tid: payload._tid }); }
       };
-      xhr.onerror = function() { respond('TRANSFORM_RESULT', { body: null, _tid: payload._tid }); };
-      xhr.ontimeout = function() { respond('TRANSFORM_RESULT', { body: null, _tid: payload._tid }); };
+      xhr.onerror = function() { respond({ body: null, _tid: payload._tid }); };
+      xhr.ontimeout = function() { respond({ body: null, _tid: payload._tid }); };
       xhr.send(JSON.stringify({ body: payload.body, url: payload.url }));
       break;
     }
@@ -500,8 +568,8 @@ window.addEventListener('message', function(event) {
         xhr.open('POST', SERVER + '/api/process/commit');
         xhr.setRequestHeader('Content-Type', 'application/json');
         xhr.setRequestHeader('Authorization', 'Bearer ' + token);
-        xhr.onload = function() { respond('COMMIT_RESULT', {}); };
-        xhr.onerror = function() { respond('COMMIT_RESULT', {}); };
+        xhr.onload = function() { respond({}); };
+        xhr.onerror = function() { respond({}); };
         xhr.send(JSON.stringify({ token: payload.usageToken }));
       });
       break;

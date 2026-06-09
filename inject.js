@@ -80,86 +80,61 @@
     }, 3000);
   }
 
-  function allocateJob(fileSize) {
+  function sendToContent(type, payload) {
     return new Promise(function(resolve, reject) {
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', SERVER + '/api/process/allocate');
-      xhr.setRequestHeader('Content-Type', 'application/json');
-      xhr.setRequestHeader('Authorization', 'Bearer ' + getToken());
-      xhr.onload = function() {
-        try {
-          var data = JSON.parse(xhr.responseText);
-          if (data.ok) resolve(data);
-          else reject(new Error(data.error || 'Allocate failed'));
-        } catch (e) { reject(new Error('Invalid response')); }
-      };
-      xhr.onerror = function() { reject(new Error('Network error')); };
-      xhr.send(JSON.stringify({ file_size: fileSize }));
+      var msgId = Date.now() + '_' + Math.random();
+      var timeout = setTimeout(function() { window.removeEventListener('message', handler); reject(new Error('Request timeout')); }, 120000);
+      function handler(e) {
+        if (e.data && e.data.source === 'encodex-content' && e.data.type === type + '_RESULT' && e.data.id === msgId) {
+          clearTimeout(timeout);
+          window.removeEventListener('message', handler);
+          if (e.data.error) reject(new Error(e.data.error));
+          else resolve(e.data.result);
+        }
+      }
+      window.addEventListener('message', handler);
+      window.postMessage({ source: 'encodex-inject', type: type, payload: payload, id: msgId }, '*');
     });
+  }
+
+  // Listen for upload progress from content.js relay
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.source === 'encodex-content' && e.data.type === 'UPLOAD_PROGRESS') {
+      if (e.data.payload && e.data.payload.total) {
+        var pct = Math.round(20 + (e.data.payload.loaded / e.data.payload.total) * 40);
+        var label = (window._encodex_currentLang === 'ru' ? 'Загрузка' : 'Uploading') + ' (' + Math.round((e.data.payload.loaded / e.data.payload.total) * 100) + '%)';
+        updateOverlay(label, pct);
+      }
+    }
+  });
+
+  function allocateJob(fileSize) {
+    return sendToContent('JOB_ALLOCATE', { file_size: fileSize, _token: getToken() });
   }
 
   function uploadFile(file, uploadToken) {
-    return new Promise(function(resolve, reject) {
-      var fd = new FormData();
-      fd.append('video', file);
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', SERVER + '/api/process/upload');
-      xhr.setRequestHeader('Authorization', 'Bearer ' + uploadToken);
-      xhr.upload.onprogress = function(e) {
-        if (e.lengthComputable) {
-          var pct = Math.round(20 + (e.loaded / e.total) * 40);
-          var label = (window._encodex_currentLang === 'ru' ? 'Загрузка' : 'Uploading') + ' (' + Math.round((e.loaded / e.total) * 100) + '%)';
-          updateOverlay(label, pct);
-        }
-      };
-      xhr.onload = function() {
-        try {
-          var data = JSON.parse(xhr.responseText);
-          if (data.ok) resolve(data);
-          else reject(new Error(data.error || 'Upload failed'));
-        } catch (e) { reject(new Error('Invalid response')); }
-      };
-      xhr.onerror = function() { reject(new Error('Network error')); };
-      xhr.send(fd);
-    });
+    return sendToContent('JOB_UPLOAD', { file: file, upload_token: uploadToken });
   }
 
   function pollStatus(jobId) {
+    var attempts = 0;
     return new Promise(function(resolve, reject) {
-      var attempts = 0;
       (function poll() {
         var label = window._encodex_currentLang === 'ru' ? 'Обработка FFmpeg...' : 'FFmpeg processing...';
         updateOverlay(label, Math.min(85, 60 + attempts));
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', SERVER + '/api/process/status?job_id=' + jobId);
-        xhr.onload = function() {
-          try {
-            var data = JSON.parse(xhr.responseText);
-            if (data.ok && data.status === 200) resolve();
-            else if (data.ok && data.status >= 400) reject(new Error('FFmpeg error: ' + (data.error || data.status)));
-            else { attempts++; if (attempts > 180) return reject(new Error('Timeout')); setTimeout(poll, 2000); }
-          } catch (e) { attempts++; setTimeout(poll, 2000); }
-        };
-        xhr.onerror = function() { attempts++; setTimeout(poll, 2000); };
-        xhr.send();
+        sendToContent('JOB_POLL', { job_id: jobId }).then(function(data) {
+          if (data.ok && data.status === 200) resolve();
+          else if (data.ok && data.status >= 400) reject(new Error('FFmpeg error: ' + (data.error || data.status)));
+          else { attempts++; if (attempts > 180) return reject(new Error('Timeout')); setTimeout(poll, 2000); }
+        }).catch(function() { attempts++; if (attempts > 180) reject(new Error('Timeout')); else setTimeout(poll, 2000); });
       })();
     });
   }
 
   function downloadResult(jobId, uploadToken) {
-    return new Promise(function(resolve, reject) {
-      var label = window._encodex_currentLang === 'ru' ? 'Скачивание...' : 'Downloading...';
-      updateOverlay(label, 90);
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', SERVER + '/api/process/result?job_id=' + jobId + '&token=' + uploadToken);
-      xhr.responseType = 'blob';
-      xhr.onload = function() {
-        if (xhr.status === 200) resolve(xhr.response);
-        else reject(new Error('Download failed: ' + xhr.status));
-      };
-      xhr.onerror = function() { reject(new Error('Network error')); };
-      xhr.send();
-    });
+    var label = window._encodex_currentLang === 'ru' ? 'Скачивание...' : 'Downloading...';
+    updateOverlay(label, 90);
+    return sendToContent('JOB_DOWNLOAD', { job_id: jobId, upload_token: uploadToken });
   }
 
   var _reinjecting = false;
