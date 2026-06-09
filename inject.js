@@ -165,30 +165,40 @@
   var _reinjecting = false;
 
   function interceptFileInput(e) {
+    var isDrop = e.type === 'drop';
     var input = e.target;
-    if (input.tagName !== 'INPUT' || input.type !== 'file') return;
+
+    if (isDrop) {
+      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files[0]) return;
+      if (!e.dataTransfer.files[0].type.startsWith('video/')) return;
+    } else {
+      if (input.tagName !== 'INPUT' || input.type !== 'file') return;
+      if (!input.files || !input.files[0]) return;
+    }
     if (_reinjecting) return;
     if (processing) return;
     if (!hqEnabled) return;
-    if (!input.files || !input.files[0]) return;
 
-    var file = input.files[0];
+    var file = isDrop ? e.dataTransfer.files[0] : input.files[0];
 
-    // Check token
     if (!getToken()) {
       if (window._encodex_currentLang === 'ru') alert('EncodeX: войди в аккаунт в расширении');
       else alert('EncodeX: login in the extension first');
       e.stopImmediatePropagation();
+      if (isDrop) e.preventDefault();
       return;
     }
 
     e.stopImmediatePropagation();
+    if (isDrop) e.preventDefault();
     processing = true;
     showOverlay(file);
     updateOverlay(window._encodex_currentLang === 'ru' ? 'Подготовка...' : 'Preparing...', 10);
 
+    var _startTime = Date.now();
     var _uploadToken = null;
     var _jobId = null;
+    var dropTarget = isDrop ? e.target : null;
 
     allocateJob(file.size).then(function(alloc) {
       _uploadToken = alloc.upload_token;
@@ -209,9 +219,13 @@
         removeOverlay();
         showToast(elapsed);
         _reinjecting = true;
-        input.files = dt.files;
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        input.dispatchEvent(new Event('input', { bubbles: true }));
+        if (isDrop) {
+          dropTarget.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+        } else {
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         setTimeout(function() { _reinjecting = false; }, 200);
       }, 800);
     }).catch(function(err) {
@@ -225,6 +239,7 @@
 
   document.addEventListener('change', interceptFileInput, true);
   document.addEventListener('input', interceptFileInput, true);
+  document.addEventListener('drop', interceptFileInput, true);
 
   // Also attach directly to any file inputs already in DOM or added later (TikTok shadow DOM workaround)
   function attachToInput(el) {
