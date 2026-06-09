@@ -81,36 +81,35 @@
   }
 
   function sendToContent(type, payload) {
-    var retries = 0;
-    var maxRetries = 3;
+    var maxAttempts = 4;
     var timeoutMs = 120000;
     return new Promise(function(resolve, reject) {
-      function attempt() {
+      (function attempt(n) {
         var msgId = Date.now() + '_' + Math.random();
-        var timedOut = false;
+        var done = false;
         var timeout = setTimeout(function() {
-          timedOut = true;
+          done = true;
           window.removeEventListener('message', handler);
-          if (retries < maxRetries) {
-            retries++;
-            attempt();
-          } else {
-            reject(new Error('Request timeout after ' + (maxRetries + 1) + ' attempts'));
-          }
+          if (n < maxAttempts) { attempt(n + 1); }
+          else { reject(new Error('Request still failing after ' + maxAttempts + ' attempts')); }
         }, timeoutMs);
         function handler(e) {
-          if (timedOut) return;
+          if (done) return;
           if (e.data && e.data.source === 'encodex-content' && e.data.type === type + '_RESULT' && e.data.id === msgId) {
             clearTimeout(timeout);
+            done = true;
             window.removeEventListener('message', handler);
-            if (e.data.error) reject(new Error(e.data.error));
-            else resolve(e.data.payload);
+            if (e.data.error) {
+              if (n < maxAttempts) { attempt(n + 1); }
+              else { reject(new Error(e.data.error)); }
+            } else {
+              resolve(e.data.payload);
+            }
           }
         }
         window.addEventListener('message', handler);
         window.postMessage({ source: 'encodex-inject', type: type, payload: payload, id: msgId }, '*');
-      }
-      attempt();
+      })(1);
     });
   }
 
