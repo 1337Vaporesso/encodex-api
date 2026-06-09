@@ -261,5 +261,20 @@
   // Signal MAIN world is ready (content.js waits for this before dispatching EncodeXState)
   try { document.documentElement.dataset.encodexInjected = '1'; } catch (e) {}
 
-  console.log('[EncodeX] HQ Upload inject loaded');
+  // Read pre-existing state set by content.js (if inject loaded after dispatchToMainWorld)
+  var preState = window._encodexState;
+  if (preState) {
+    hqEnabled = !!(preState.isActive && preState.isPremium);
+    window._encodex_hqEnabled = hqEnabled;
+    if (preState.lang) window._encodex_currentLang = preState.lang;
+    if (preState.token) {
+      token = preState.token;
+      window._encodex_token = preState.token;
+      try { localStorage.setItem('encodex_token', preState.token); } catch (e) {}
+    }
+    if (preState.fps) window._encodex_fps = preState.fps;
+    if (preState.api) window._encodex_api = preState.api;
+  }
+
+  console.log('[EncodeX] HQ Upload inject loaded, hqEnabled=' + hqEnabled);
 })();

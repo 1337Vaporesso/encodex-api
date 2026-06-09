@@ -426,7 +426,7 @@ chrome.storage.onChanged.addListener(function(changes, areaName) {
 
 function dispatchToMainWorld(detail) {
   var el = document.createElement('script');
-  el.textContent = 'window.dispatchEvent(new CustomEvent("EncodeXState",{detail:' + JSON.stringify(detail) + '}))';
+  el.textContent = 'window._encodexState=' + JSON.stringify(detail) + ';window.dispatchEvent(new CustomEvent("EncodeXState",{detail:' + JSON.stringify(detail) + '}))';
   (document.head || document.documentElement).appendChild(el);
   el.remove();
 }
