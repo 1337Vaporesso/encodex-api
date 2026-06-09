@@ -8,8 +8,10 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
-const ffmpegPath = require('ffmpeg-static');
-const ffprobePath = require('ffprobe-static').path;
+const localFfmpeg = path.join(__dirname, '..', 'ffmpeg', 'ffmpeg.exe');
+const localFfprobe = path.join(__dirname, '..', 'ffmpeg', 'ffprobe.exe');
+const ffmpegPath = fs.existsSync(localFfmpeg) ? localFfmpeg : require('ffmpeg-static');
+const ffprobePath = fs.existsSync(localFfprobe) ? localFfprobe : require('ffprobe-static').path;
 require('dotenv').config();
 
 const app = express();
@@ -550,7 +552,7 @@ async function runFFmpegPipeline(jobId, inputPath, outputPath) {
     // -itsscale 2 как в bat: меняет PTS → 60fps→30fps → TikTok не ресайзит
     const itsscale = fps >= 200 ? 12 : (fps >= 100 ? 6 : (fps >= 50 ? 2 : 1));
     console.log('[EncodeX] remux: -itsscale', itsscale, fps + 'fps -> ~' + Math.round(fps / Math.max(1, itsscale)) + 'fps');
-    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', '-movflags', 'faststart', outputPath];
+    const remuxArgs = ['-y', '-itsscale', String(itsscale), '-i', inputPath, '-c:v', 'copy', '-c:a', 'copy', outputPath];
     await execFFmpeg(jobId, remuxArgs, duration);
     if (!fs.existsSync(outputPath)) {
       console.error('[EncodeX] FFmpeg exit 0 but output not found:', outputPath);
