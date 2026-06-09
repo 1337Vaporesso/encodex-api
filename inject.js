@@ -81,19 +81,36 @@
   }
 
   function sendToContent(type, payload) {
+    var retries = 0;
+    var maxRetries = 3;
+    var timeoutMs = 120000;
     return new Promise(function(resolve, reject) {
-      var msgId = Date.now() + '_' + Math.random();
-      var timeout = setTimeout(function() { window.removeEventListener('message', handler); reject(new Error('Request timeout')); }, 120000);
-      function handler(e) {
-        if (e.data && e.data.source === 'encodex-content' && e.data.type === type + '_RESULT' && e.data.id === msgId) {
-          clearTimeout(timeout);
+      function attempt() {
+        var msgId = Date.now() + '_' + Math.random();
+        var timedOut = false;
+        var timeout = setTimeout(function() {
+          timedOut = true;
           window.removeEventListener('message', handler);
-          if (e.data.error) reject(new Error(e.data.error));
-          else resolve(e.data.payload);
+          if (retries < maxRetries) {
+            retries++;
+            attempt();
+          } else {
+            reject(new Error('Request timeout after ' + (maxRetries + 1) + ' attempts'));
+          }
+        }, timeoutMs);
+        function handler(e) {
+          if (timedOut) return;
+          if (e.data && e.data.source === 'encodex-content' && e.data.type === type + '_RESULT' && e.data.id === msgId) {
+            clearTimeout(timeout);
+            window.removeEventListener('message', handler);
+            if (e.data.error) reject(new Error(e.data.error));
+            else resolve(e.data.payload);
+          }
         }
+        window.addEventListener('message', handler);
+        window.postMessage({ source: 'encodex-inject', type: type, payload: payload, id: msgId }, '*');
       }
-      window.addEventListener('message', handler);
-      window.postMessage({ source: 'encodex-inject', type: type, payload: payload, id: msgId }, '*');
+      attempt();
     });
   }
 
