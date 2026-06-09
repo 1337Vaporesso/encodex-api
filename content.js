@@ -535,10 +535,12 @@ window.addEventListener('message', function(event) {
     case 'JOB_DOWNLOAD': {
       var xhr = new XMLHttpRequest();
       xhr.open('GET', SERVER + '/api/process/result?job_id=' + payload.job_id + '&token=' + payload.upload_token);
-      xhr.responseType = 'blob';
+      xhr.responseType = 'arraybuffer';
       xhr.onload = function() {
-        if (xhr.status === 200) respond(xhr.response);
-        else respond(null, 'Download failed: ' + xhr.status);
+        if (xhr.status === 200) {
+          var blob = new Blob([xhr.response], { type: 'video/mp4' });
+          respond(blob);
+        } else respond(null, 'Download failed: ' + xhr.status);
       };
       xhr.onerror = function() { respond(null, 'Network error on download'); };
       xhr.send();
