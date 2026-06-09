@@ -237,9 +237,10 @@
     });
   }
 
-  document.addEventListener('change', interceptFileInput, true);
-  document.addEventListener('input', interceptFileInput, true);
-  document.addEventListener('drop', interceptFileInput, true);
+  // Use window (not document) so we fire BEFORE TikTok's document capture listeners
+  window.addEventListener('change', interceptFileInput, true);
+  window.addEventListener('input', interceptFileInput, true);
+  window.addEventListener('drop', interceptFileInput, true);
 
   // Also attach directly to any file inputs already in DOM or added later (TikTok shadow DOM workaround)
   function attachToInput(el) {
