@@ -72,15 +72,14 @@ function addBadgeToPage() {
 
     setTimeout(function() {
       chrome.storage.local.get(["encodex_token", "encodex_fps"], function(tokenData) {
-        window.dispatchEvent(new CustomEvent("EncodeXState", {
-          detail: {
-            lang: lang,
-            isActive: isActive,
-            isPremium: isPremium,
-            token: tokenData.encodex_token || null,
-            fps: tokenData.encodex_fps || "auto"
-          }
-        }));
+        dispatchToMainWorld({
+          lang: lang,
+          isActive: isActive,
+          isPremium: isPremium,
+          token: tokenData.encodex_token || null,
+          fps: tokenData.encodex_fps || "auto",
+          api: "https://encodex-api-production.up.railway.app"
+        });
       });
     }, 1000);
   });
@@ -411,18 +410,24 @@ chrome.storage.onChanged.addListener(function(changes, areaName) {
         }
       }
 
-      window.dispatchEvent(new CustomEvent("EncodeXState", {
-        detail: {
-          lang: lang,
-          isActive: isActive,
-          isPremium: isPremium,
-          token: data.encodex_token || null,
-          fps: data.encodex_fps || "auto"
-        }
-      }));
+      dispatchToMainWorld({
+        lang: lang,
+        isActive: isActive,
+        isPremium: isPremium,
+        token: data.encodex_token || null,
+        fps: data.encodex_fps || "auto",
+        api: "https://encodex-api-production.up.railway.app"
+      });
     });
   }
 });
+
+function dispatchToMainWorld(detail) {
+  var el = document.createElement('script');
+  el.textContent = 'window.dispatchEvent(new CustomEvent("EncodeXState",{detail:' + JSON.stringify(detail) + '}))';
+  (document.head || document.documentElement).appendChild(el);
+  el.remove();
+}
 
 // === Message bridge: inject.js → content.js network calls (bypass CSP) ===
 const SERVER = 'https://encodex-api-production.up.railway.app';
@@ -444,9 +449,7 @@ function getTokenFromStorage() {
 // Re-read token when storage changes (e.g. after re-login)
 chrome.storage.onChanged.addListener(function(changes, area) {
   if (area === 'local' && changes.encodex_token) {
-    window.dispatchEvent(new CustomEvent('EncodeXState', {
-      detail: { token: changes.encodex_token.newValue || null }
-    }));
+    dispatchToMainWorld({ token: changes.encodex_token.newValue || null });
   }
 });
 

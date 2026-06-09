@@ -268,6 +268,7 @@
       if (e.detail.token) {
         token = e.detail.token;
         window._encodex_token = e.detail.token;
+        try { localStorage.setItem('encodex_token', e.detail.token); } catch (e) {}
       }
       if (e.detail.fps) window._encodex_fps = e.detail.fps;
       if (e.detail.api) window._encodex_api = e.detail.api;
