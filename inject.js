@@ -165,19 +165,20 @@
   var _reinjecting = false;
 
   function interceptFileInput(e) {
+    console.log('[EncodeX] interceptFileInput', e.type, e.target.tagName, 'hqEnabled=' + hqEnabled, 'processing=' + processing, '_reinjecting=' + _reinjecting);
     var isDrop = e.type === 'drop';
     var input = e.target;
 
     if (isDrop) {
-      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files[0]) return;
-      if (!e.dataTransfer.files[0].type.startsWith('video/')) return;
+      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files[0]) { console.log('[EncodeX] no files in drop'); return; }
+      if (!e.dataTransfer.files[0].type.startsWith('video/')) { console.log('[EncodeX] drop not video:', e.dataTransfer.files[0].type); return; }
     } else {
-      if (input.tagName !== 'INPUT' || input.type !== 'file') return;
-      if (!input.files || !input.files[0]) return;
+      if (input.tagName !== 'INPUT' || input.type !== 'file') { console.log('[EncodeX] not a file input:', input.tagName, input.type); return; }
+      if (!input.files || !input.files[0]) { console.log('[EncodeX] input has no files'); return; }
     }
-    if (_reinjecting) return;
-    if (processing) return;
-    if (!hqEnabled) return;
+    if (_reinjecting) { console.log('[EncodeX] _reinjecting'); return; }
+    if (processing) { console.log('[EncodeX] already processing'); return; }
+    if (!hqEnabled) { console.log('[EncodeX] intercept skipped: hqEnabled=false'); return; }
 
     var file = isDrop ? e.dataTransfer.files[0] : input.files[0];
 
@@ -281,6 +282,9 @@
     var stored = localStorage.getItem('encodex_token');
     if (stored) token = stored;
   } catch (e) {}
+
+  // Signal MAIN world is ready (content.js waits for this before dispatching EncodeXState)
+  try { document.documentElement.dataset.encodexInjected = '1'; } catch (e) {}
 
   console.log('[EncodeX] HQ Upload inject loaded');
 })();

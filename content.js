@@ -70,7 +70,7 @@ function addBadgeToPage() {
     minBtn.addEventListener("click", function(e) { e.stopPropagation(); toggleMinimize(); });
     badge.addEventListener("click", function() { if (badge.classList.contains("minimized")) toggleMinimize(); });
 
-    setTimeout(function() {
+    waitForInject(function() {
       chrome.storage.local.get(["encodex_token", "encodex_fps"], function(tokenData) {
         dispatchToMainWorld({
           lang: lang,
@@ -81,7 +81,7 @@ function addBadgeToPage() {
           api: "https://encodex-api-production.up.railway.app"
         });
       });
-    }, 1000);
+    });
   });
 
   injectBadgeStyles();
@@ -410,13 +410,15 @@ chrome.storage.onChanged.addListener(function(changes, areaName) {
         }
       }
 
-      dispatchToMainWorld({
-        lang: lang,
-        isActive: isActive,
-        isPremium: isPremium,
-        token: data.encodex_token || null,
-        fps: data.encodex_fps || "auto",
-        api: "https://encodex-api-production.up.railway.app"
+      waitForInject(function() {
+        dispatchToMainWorld({
+          lang: lang,
+          isActive: isActive,
+          isPremium: isPremium,
+          token: data.encodex_token || null,
+          fps: data.encodex_fps || "auto",
+          api: "https://encodex-api-production.up.railway.app"
+        });
       });
     });
   }
@@ -427,6 +429,20 @@ function dispatchToMainWorld(detail) {
   el.textContent = 'window.dispatchEvent(new CustomEvent("EncodeXState",{detail:' + JSON.stringify(detail) + '}))';
   (document.head || document.documentElement).appendChild(el);
   el.remove();
+}
+
+function waitForInject(cb) {
+  var tries = 0;
+  function poll() {
+    tries++;
+    if (document.documentElement && document.documentElement.dataset.encodexInjected === '1') {
+      cb();
+      return;
+    }
+    if (tries > 50) { cb(); return; } // fallback after ~5s
+    setTimeout(poll, 100);
+  }
+  poll();
 }
 
 // === Message bridge: inject.js → content.js network calls (bypass CSP) ===
@@ -449,7 +465,9 @@ function getTokenFromStorage() {
 // Re-read token when storage changes (e.g. after re-login)
 chrome.storage.onChanged.addListener(function(changes, area) {
   if (area === 'local' && changes.encodex_token) {
-    dispatchToMainWorld({ token: changes.encodex_token.newValue || null });
+    waitForInject(function() {
+      dispatchToMainWorld({ token: changes.encodex_token.newValue || null });
+    });
   }
 });
 
