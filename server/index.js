@@ -664,6 +664,68 @@ app.get('/api/process/result', async (req, res) => {
   }
 });
 
+// ---- QUICK PROCESS (no auth, no DB, just upload + process + download) ----
+app.post('/api/process/quick', upload.single('video'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'No file' });
+    const inputPath = req.file.path;
+    const sttsPath = path.join(OUTPUT_DIR, `stts_${req.file.filename}`);
+    const outputPath = path.join(OUTPUT_DIR, `quick_${req.file.filename}`);
+    const itsscale = parseFloat(req.query.itsscale || req.body.itsscale || '2');
+    const mode = req.query.mode || req.body.mode || 'hq';
+
+    // Step 1: stts patch (fast binary manipulation)
+    try {
+      const { patchStts } = require('./stts_patcher');
+      patchStts(inputPath, sttsPath);
+    } catch (e) {
+      console.warn('[EncodeX] stts patch failed:', e.message);
+      // Fallback: use input directly
+      fs.copyFileSync(inputPath, sttsPath);
+    }
+
+    // Step 2: ffmpeg -itsscale remux
+    if (mode === 'copy') {
+      await execFFmpegSimple(['-y', '-i', sttsPath, '-c:v', 'copy', '-c:a', 'copy', outputPath]);
+    } else {
+      await execFFmpegSimple(['-y', '-itsscale', String(itsscale), '-i', sttsPath, '-c:v', 'copy', '-c:a', 'copy', outputPath]);
+    }
+
+    if (!fs.existsSync(outputPath)) throw new Error('Output not found');
+    const stat = await fs.promises.stat(outputPath);
+    res.writeHead(200, {
+      'Content-Type': 'video/mp4',
+      'Content-Length': stat.size,
+      'Content-Disposition': 'attachment; filename="video.mp4"'
+    });
+    const stream = fs.createReadStream(outputPath);
+    stream.pipe(res);
+    stream.on('end', () => {
+      fs.unlink(inputPath, () => {});
+      try { fs.unlinkSync(sttsPath); } catch(e) {}
+      setTimeout(() => fs.unlink(outputPath, () => {}), 60000);
+    });
+  } catch (e) {
+    console.error('[EncodeX] quick process error:', e.message);
+    if (req.file) fs.unlink(req.file.path, () => {});
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+async function execFFmpegSimple(args) {
+  console.log('[EncodeX] FFmpeg:', ffmpegPath, args.join(' '));
+  const proc = spawn(ffmpegPath, args);
+  let stderr = '';
+  return new Promise((resolve, reject) => {
+    proc.stderr.on('data', d => { stderr += d.toString(); });
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error('ffmpeg exited ' + code + ': ' + stderr.slice(-300)));
+    });
+    proc.on('error', reject);
+  });
+}
+
 // ---- COMMIT (by usage_token, charged AFTER TikTok upload succeeds) ----
 app.post('/api/process/commit', auth, async (req, res) => {
   try {
