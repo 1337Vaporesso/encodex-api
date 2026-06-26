@@ -23,26 +23,25 @@ async function initWasmPatcher() {
     };
     return true;
   } catch (e) {
-    console.error('[EncodeX] WASM error:', e);
+    console.error('[EncodeX] WASM:', e);
     return false;
   }
 }
 
 /* ═══ Elements ═══ */
-const $ = id => document.getElementById(id);
-const fileInput = $('fileInput');
-const uploadTrigger = $('uploadTrigger');
-const patchBtn = $('patchBtn');
-const fileNameDisplay = $('fileNameDisplay');
-const statusText = $('statusText');
-const statusBox = $('status');
-const patchProgress = $('patchProgress');
-const patchProgressBar = $('patchProgressBar');
+const fileInput = document.getElementById('fileInput');
+const uploadTrigger = document.getElementById('uploadTrigger');
+const patchBtn = document.getElementById('patchBtn');
+const fileNameDisplay = document.getElementById('fileNameDisplay');
+const statusText = document.getElementById('statusText');
+const statusBox = document.getElementById('status');
+const patchProgress = document.getElementById('patchProgress');
+const patchProgressBar = document.getElementById('patchProgressBar');
 
 /* ═══ Helpers ═══ */
-const FORMATS = { mp4:'MP4', mov:'MOV', avi:'AVI', mkv:'MKV', webm:'WebM', flv:'FLV' };
+const FORMATS = { mp4:'MP4', mov:'MOV', avi:'AVI', mkv:'MKV' };
 function getFmt(n) { const e = n.split('.').pop().toLowerCase(); return FORMATS[e] || null; }
-function fmtSize(b) { return b < 1048576 ? (b/1024).toFixed(1)+' KB' : (b/1048576).toFixed(1)+' MB'; }
+function fmtSize(b) { return (b/1048576).toFixed(1)+' MB'; }
 
 function setStatus(msg, state) {
   statusText.textContent = msg;
@@ -58,8 +57,10 @@ function setProgress(pct) {
 function updatePremiumUI() {
   const auth = window.__ENCODEX_AUTH;
   const prem = auth && !!auth._a;
-  $('patcherLockBadge').hidden = prem;
-  $('patcherActiveBadge').hidden = !prem;
+  const lock = document.getElementById('patcherLockBadge');
+  const act = document.getElementById('patcherActiveBadge');
+  if (lock) lock.hidden = prem;
+  if (act) act.hidden = !prem;
   patchBtn.disabled = !prem || !selectedFile;
   patchBtn.classList.toggle('enabled', prem && !!selectedFile);
 }
@@ -76,18 +77,19 @@ function selectFile(file) {
     selectedFile = null; updatePremiumUI(); return;
   }
   selectedFile = file;
-  fileNameDisplay.textContent = `${file.name} (${fmtSize(file.size)})`;
-  fileNameDisplay.classList.add('has-file', 'size-warn');
-  fileNameDisplay.classList.toggle('size-warn', file.size <= 209715200);
-  fileNameDisplay.classList.toggle('size-danger', file.size > 209715200);
+  fileNameDisplay.textContent = file.name + ' (' + fmtSize(file.size) + ')';
+  fileNameDisplay.classList.add('has-file');
+  fileNameDisplay.classList.remove('size-warn', 'size-danger');
+  if (file.size > 209715200) fileNameDisplay.classList.add('size-danger');
+  else if (file.size > 104857600) fileNameDisplay.classList.add('size-warn');
   updatePremiumUI();
-  setStatus(`Ready: ${file.name} (${fmt}). Click Patch & Download.`, 'idle');
+  setStatus('Ready: ' + file.name + ' (' + fmt + ').', 'idle');
 }
 
 /* ═══ Patching ═══ */
-async function patchVideo(e) {
-  e.stopPropagation();
-  if (!selectedFile || !wasmPatcher) return;
+async function patchVideo() {
+  if (!selectedFile) { setStatus('No file selected.', 'error'); return; }
+  if (!wasmPatcher) { setStatus('Patcher not loaded.', 'error'); return; }
   const auth = window.__ENCODEX_AUTH;
   if (!auth || !auth._a) { setStatus('Premium required.', 'error'); return; }
   setProgress(0);
@@ -111,8 +113,8 @@ async function patchVideo(e) {
     a.remove();
     URL.revokeObjectURL(url);
     setProgress(100);
-    setStatus('Success! Video patched and downloaded.', 'success');
-    setTimeout(() => { patchProgress.classList.remove('visible'); patchProgressBar.style.width = '0%'; }, 3500);
+    setStatus('Done! Video patched and downloaded.', 'success');
+    setTimeout(function() { patchProgress.classList.remove('visible'); patchProgressBar.style.width = '0%'; }, 3500);
   } catch (err) {
     setStatus('Error: ' + (err.message || err), 'error');
     patchProgress.classList.remove('visible');
@@ -120,40 +122,42 @@ async function patchVideo(e) {
 }
 
 /* ═══ Events ═══ */
-uploadTrigger.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => { if (fileInput.files?.[0]) selectFile(fileInput.files[0]); });
-uploadTrigger.addEventListener('dragover', e => { e.preventDefault(); uploadTrigger.classList.add('drag-over'); });
-uploadTrigger.addEventListener('dragleave', () => uploadTrigger.classList.remove('drag-over'));
-uploadTrigger.addEventListener('drop', e => {
+uploadTrigger.addEventListener('click', function() { fileInput.click(); });
+fileInput.addEventListener('change', function() { if (fileInput.files && fileInput.files[0]) selectFile(fileInput.files[0]); });
+uploadTrigger.addEventListener('dragover', function(e) { e.preventDefault(); uploadTrigger.classList.add('drag-over'); });
+uploadTrigger.addEventListener('dragleave', function() { uploadTrigger.classList.remove('drag-over'); });
+uploadTrigger.addEventListener('drop', function(e) {
   e.preventDefault();
   uploadTrigger.classList.remove('drag-over');
-  if (e.dataTransfer.files?.[0]) selectFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files && e.dataTransfer.files[0]) selectFile(e.dataTransfer.files[0]);
 });
 patchBtn.addEventListener('click', patchVideo);
 
 /* ═══ Init ═══ */
-addEventListener('DOMContentLoaded', async () => {
-  let ready = false;
-  const waitAuth = setInterval(() => {
+(function boot() {
+  // Start WASM init immediately
+  initWasmPatcher().then(function(ok) {
+    if (ok) {
+      setProgress(0);
+      setStatus('Ready — select a video.', 'idle');
+    } else {
+      setStatus('Patcher failed to load. Reload extension.', 'error');
+    }
+  });
+
+  // Poll for __ENCODEX_AUTH (set by runtime.js after session check)
+  var waitAuth = setInterval(function() {
     if (window.__ENCODEX_AUTH) {
       clearInterval(waitAuth);
       updatePremiumUI();
-      // Watch for premium state changes
-      const orig = window.__ENCODEX_AUTH;
-      let cur = orig._a;
-      setInterval(() => {
-        if (window.__ENCODEX_AUTH && window.__ENCODEX_AUTH._a !== cur) {
-          cur = window.__ENCODEX_AUTH._a;
+      // Keep polling for auth changes
+      var prev = window.__ENCODEX_AUTH._a;
+      setInterval(function() {
+        if (window.__ENCODEX_AUTH && window.__ENCODEX_AUTH._a !== prev) {
+          prev = window.__ENCODEX_AUTH._a;
           updatePremiumUI();
         }
-      }, 1000);
+      }, 2000);
     }
-  }, 100);
-  const ok = await initWasmPatcher();
-  if (ok) {
-    setProgress(0);
-    setStatus('Ready — drop a video to start.', 'idle');
-  } else {
-    setStatus('Failed to load patcher. Reload extension.', 'error');
-  }
-});
+  }, 200);
+})();
