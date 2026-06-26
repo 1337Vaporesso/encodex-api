@@ -53,7 +53,7 @@ function setProgress(pct) {
   patchProgressBar.style.width = Math.min(100, pct) + '%';
 }
 
-/* ═══ Premium UI ═══ */
+/* ═══ Premium UI (visual only, blocking done by runtime.js) ═══ */
 function updatePremiumUI() {
   const auth = window.__ENCODEX_AUTH;
   const prem = auth && !!auth._a;
@@ -61,8 +61,9 @@ function updatePremiumUI() {
   const act = document.getElementById('patcherActiveBadge');
   if (lock) lock.hidden = prem;
   if (act) act.hidden = !prem;
-  patchBtn.disabled = !prem || !selectedFile;
-  patchBtn.classList.toggle('enabled', prem && !!selectedFile);
+  // Enable button when file selected; runtime.js blocks non-premium via capture handler
+  patchBtn.disabled = !selectedFile;
+  patchBtn.classList.toggle('enabled', !!selectedFile);
 }
 
 /* ═══ File selection ═══ */
@@ -150,7 +151,6 @@ patchBtn.addEventListener('click', patchVideo);
     if (window.__ENCODEX_AUTH) {
       clearInterval(waitAuth);
       updatePremiumUI();
-      // Keep polling for auth changes
       var prev = window.__ENCODEX_AUTH._a;
       setInterval(function() {
         if (window.__ENCODEX_AUTH && window.__ENCODEX_AUTH._a !== prev) {
@@ -160,4 +160,6 @@ patchBtn.addEventListener('click', patchVideo);
       }, 2000);
     }
   }, 200);
+  // Also check on first frame in case auth already set
+  updatePremiumUI();
 })();
