@@ -456,8 +456,22 @@
       transform: translateY(-2px);
     }
 
-    /* ── Upload Button ── */
+    /* ── Upload / Drop Zone ── */
     #fileInput, #ffmpegFileInput { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+    .drop-zone {
+      width: 100%; min-height: 60px; border-radius: 14px;
+      border: 1.5px dashed var(--border); background: var(--surface);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+      padding: 14px; cursor: pointer; transition: all 220ms ease;
+      position: relative; overflow: hidden;
+    }
+    .drop-zone:hover { border-color: var(--accent); background: var(--accent-glow); }
+    .drop-zone.drag-over { border-color: var(--accent); background: var(--accent-glow); box-shadow: 0 0 24px var(--accent-glow); transform: scale(1.01); }
+    .drop-zone-icon { color: var(--text3); transition: all 220ms; }
+    .drop-zone:hover .drop-zone-icon { color: var(--accent); }
+    .drop-zone-label { font-size: 12px; font-weight: 600; color: var(--text2); }
+    .drop-zone-hint { font-size: 9px; color: var(--text3); margin-top: 1px; }
+    .drop-zone.drag-over .drop-zone-label { color: var(--accent); }
     .upload-btn {
       width: 100%; min-height: 52px;
       display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -911,12 +925,13 @@
                 Active
               </span>
             </div>
-            <button class="upload-btn" id="uploadTrigger" type="button">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <div class="drop-zone" id="uploadTrigger" type="button">
+              <svg class="drop-zone-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
               </svg>
-              Select Video
-            </button>
+              <span class="drop-zone-label">Drop video here or click to browse</span>
+              <span class="drop-zone-hint">MP4, MOV, AVI — up to 300 MB</span>
+            </div>
             <div class="file-name-display" id="fileNameDisplay">No file selected...</div>
             <div class="info-row">
               <div class="info-cell">
@@ -932,7 +947,10 @@
 
           <div class="card status-card">
             <div class="status-card-label">Process</div>
-            <div id="status" class="status-box" data-state="idle">Ready — select a video to begin.</div>
+            <div id="status" class="status-box" data-state="idle">Ready — select or drop a video to begin.</div>
+            <div class="progress-wrap" id="patchProgress">
+              <div class="progress-bar" id="patchProgressBar"></div>
+            </div>
           </div>
 
           <button class="action-btn" id="patchBtn" disabled type="button">
