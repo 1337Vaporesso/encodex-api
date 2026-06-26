@@ -51,10 +51,6 @@ ffmpegInput.addEventListener('change', function() {
   if (f) ffmpegName.textContent = f.name + ' (' + (f.size / 1024 / 1024).toFixed(1) + ' MB)';
 });
 
-document.querySelectorAll('[id$="Trigger"]').forEach(function(el) {
-  el.addEventListener('click', function() {
-    var target = document.getElementById(this.id.replace('Trigger', 'FileInput'));
-    if (target) target.click();
-  });
-});
+uploadTrigger.addEventListener('click', function() { fileInput.click(); });
+ffmpegUpload.addEventListener('click', function() { ffmpegInput.click(); });
 })();
