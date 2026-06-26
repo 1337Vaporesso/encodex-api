@@ -30,7 +30,9 @@
         "*://www.tiktok.com/*",
         "*://*.tiktok.com/*"
       ],
-      "js": ["dynamic_island.js"],
+      "js": [
+        "dynamic_island.js"
+      ],
       "run_at": "document_end"
     },
     {
@@ -41,7 +43,9 @@
         "*://*.tiktok.com/upload*",
         "*://*.tiktok.com/creator-center*"
       ],
-      "js": ["inject.js"],
+      "js": [
+        "inject.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
@@ -53,21 +57,31 @@
         "*://*.tiktok.com/upload*",
         "*://*.tiktok.com/creator-center*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start"
     },
     {
       "matches": [
         "*://www.tiktok.com/@*"
       ],
-      "js": ["content_repost.js"],
+      "js": [
+        "content_repost.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["repost_injected.js", "dynamic_island.js", "icons/*"],
-      "matches": ["*://*.tiktok.com/*"]
+      "resources": [
+        "repost_injected.js",
+        "dynamic_island.js",
+        "icons/*"
+      ],
+      "matches": [
+        "*://*.tiktok.com/*"
+      ]
     }
   ],
   "icons": {
@@ -75,5 +89,8 @@
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'unsafe-eval'; object-src 'self'"
   }
 }
