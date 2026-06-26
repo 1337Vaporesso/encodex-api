@@ -715,32 +715,23 @@ app.get('/api/process/result', async (req, res) => {
   }
 });
 
-// ---- QUICK PROCESS (premium required, stts-only, no ffmpeg) ----
+// ---- QUICK PROCESS (premium required, passthrough, patching done client-side) ----
 app.post('/api/process/quick', auth, upload.single('video'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file' });
     const userResult = await pool.query('SELECT premium FROM users WHERE id = $1', [req.userId]);
     if (!userResult.rows[0] || !userResult.rows[0].premium)
-      return res.status(403).json({ ok: false, error: 'Premium required to patch videos' });
-    const inputPath = req.file.path;
-    const outputPath = path.join(OUTPUT_DIR, `stts_${req.file.filename}`);
-
-    // Only stts + mdhd patching (fast binary manipulation, no ffmpeg)
-    const { patchVideo } = require('./stts_patcher');
-    const patched = patchVideo(inputPath, outputPath);
-
-    if (!fs.existsSync(outputPath)) throw new Error('Output not found');
-    const stat = await fs.promises.stat(outputPath);
+      return res.status(403).json({ ok: false, error: 'Premium required' });
+    const stat = await fs.promises.stat(req.file.path);
     res.writeHead(200, {
       'Content-Type': 'video/mp4',
       'Content-Disposition': 'attachment; filename="patched_video.mp4"',
       'Content-Length': stat.size
     });
-    const stream = fs.createReadStream(outputPath);
+    const stream = fs.createReadStream(req.file.path);
     stream.pipe(res);
     stream.on('end', () => {
-      fs.unlink(inputPath, () => {});
-      setTimeout(() => fs.unlink(outputPath, () => {}), 60000);
+      fs.unlink(req.file.path, () => {});
     });
   } catch (e) {
     console.error('[EncodeX] quick process error:', e.message);
