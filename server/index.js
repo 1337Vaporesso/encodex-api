@@ -733,7 +733,8 @@ app.post('/api/process/quick', auth, upload.single('video'), async (req, res) =>
     const stat = await fs.promises.stat(outputPath);
     res.writeHead(200, {
       'Content-Type': 'video/mp4',
-      'Content-Disposition': 'attachment; filename="patched_video.mp4"'
+      'Content-Disposition': 'attachment; filename="patched_video.mp4"',
+      'Content-Length': stat.size
     });
     const stream = fs.createReadStream(outputPath);
     stream.pipe(res);
