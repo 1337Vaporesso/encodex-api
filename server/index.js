@@ -715,10 +715,13 @@ app.get('/api/process/result', async (req, res) => {
   }
 });
 
-// ---- QUICK PROCESS (auth required, stts-only, no ffmpeg) ----
+// ---- QUICK PROCESS (premium required, stts-only, no ffmpeg) ----
 app.post('/api/process/quick', auth, upload.single('video'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file' });
+    const userResult = await pool.query('SELECT premium FROM users WHERE id = $1', [req.userId]);
+    if (!userResult.rows[0] || !userResult.rows[0].premium)
+      return res.status(403).json({ ok: false, error: 'Premium required to patch videos' });
     const inputPath = req.file.path;
     const outputPath = path.join(OUTPUT_DIR, `stts_${req.file.filename}`);
 
