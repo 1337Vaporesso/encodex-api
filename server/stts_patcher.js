@@ -1,12 +1,16 @@
 /**
- * MP4 stts patcher: sets all sample durations to delta=1
- * This tells TikTok the video has ideal frame timing, bypassing re-encode.
+ * MP4 stts + mdhd patcher
+ * - stts: sets all sample durations to delta=1 (constant frame rate)
+ * - mdhd: sets timescale to 60000, duration = 60000 * actual_seconds
+ * This tells TikTok the video has ideal timing, bypassing re-encode.
  */
 const fs = require('fs');
 
-function patchStts(inputPath, outputPath) {
+function patchVideo(inputPath, outputPath) {
   const data = fs.readFileSync(inputPath);
   const boxes = parseBoxes(data, 0, data.length);
+  /** @type {Buffer|null} */
+  let mdhdOriginalData = null;
 
   let modified = false;
   walkBoxes(boxes, (box) => {
@@ -17,10 +21,17 @@ function patchStts(inputPath, outputPath) {
         modified = true;
       }
     }
+    if (box.type === 'mdhd') {
+      mdhdOriginalData = box.data;
+      const patched = patchMdhdBox(box.data);
+      if (patched) {
+        box.data = patched;
+        modified = true;
+      }
+    }
   });
 
   if (!modified) {
-    // No stts found, just copy
     fs.copyFileSync(inputPath, outputPath);
     return false;
   }
@@ -34,14 +45,23 @@ function parseBoxes(buffer, offset, limit) {
   const boxes = [];
   let pos = offset;
   while (pos + 8 <= limit) {
-    const size = buffer.readUInt32BE(pos);
+    const size32 = buffer.readUInt32BE(pos);
     const type = buffer.toString('ascii', pos + 4, pos + 8);
+    let size = size32;
     if (size === 0) break; // Box extends to end of file
-    if (size < 8) { pos += 8; continue; } // Invalid size
+    if (size === 1) {
+      // 64-bit size
+      if (pos + 16 > limit) break;
+      const hi = buffer.readUInt32BE(pos + 8);
+      const lo = buffer.readUInt32BE(pos + 12);
+      size = hi * 0x100000000 + lo;
+      if (size < 16) break;
+    }
+    if (size < 8) { pos += 8; continue; }
     const dataEnd = Math.min(pos + size, limit);
     const data = buffer.subarray(pos, dataEnd);
     boxes.push({ type, size: dataEnd - pos, offset: pos, data, children: [] });
-    pos += (dataEnd - pos);
+    pos = dataEnd;
   }
   return boxes;
 }
@@ -130,4 +150,33 @@ function patchSttsBox(sttsData) {
   return newStts;
 }
 
-module.exports = { patchStts };
+function patchMdhdBox(mdhdData) {
+  // mdhd: box header(8) + version(1) + flags(3) + timescale(4) + duration(4) [+ language(2) + quality(2)]
+  if (mdhdData.length < 20) return null;
+  const view = new DataView(mdhdData.buffer, mdhdData.byteOffset, mdhdData.byteLength);
+  const version = view.getUint8(8);
+  let tsOff, durOff;
+  if (version === 0) {
+    tsOff = 12; // creation_time(4) + modification_time(4) + timescale(4) = offset 12
+    durOff = 16;
+  } else if (version === 1) {
+    tsOff = 20; // creation_time(8) + modification_time(8) + timescale(4) = offset 20
+    durOff = 24;
+  } else {
+    return null;
+  }
+  const oldTimescale = view.getUint32(tsOff, false);
+  const oldDuration = view.getUint32(durOff, false);
+  // Skip if already patched (timescale already 60000)
+  if (oldTimescale === 60000) return null;
+  // Calculate new duration: old_duration * 60000 / old_timescale
+  const newDuration = Math.round(oldDuration * 60000 / oldTimescale);
+  const newMdhd = Buffer.alloc(mdhdData.length);
+  mdhdData.copy(newMdhd);
+  newMdhd.writeUInt32BE(60000, tsOff);
+  newMdhd.writeUInt32BE(newDuration, durOff);
+  console.log('[EncodeX] mdhd patched: timescale', oldTimescale, '-> 60000, duration', oldDuration, '->', newDuration);
+  return newMdhd;
+}
+
+module.exports = { patchVideo, patchStts: patchVideo };

@@ -725,9 +725,9 @@ app.post('/api/process/quick', auth, upload.single('video'), async (req, res) =>
     const inputPath = req.file.path;
     const outputPath = path.join(OUTPUT_DIR, `stts_${req.file.filename}`);
 
-    // Only stts patching (fast binary manipulation, no ffmpeg)
-    const { patchStts } = require('./stts_patcher');
-    const patched = patchStts(inputPath, outputPath);
+    // Only stts + mdhd patching (fast binary manipulation, no ffmpeg)
+    const { patchVideo } = require('./stts_patcher');
+    const patched = patchVideo(inputPath, outputPath);
 
     if (!fs.existsSync(outputPath)) throw new Error('Output not found');
     const stat = await fs.promises.stat(outputPath);
