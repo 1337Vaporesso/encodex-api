@@ -1,0 +1,79 @@
+{
+  "manifest_version": 3,
+  "name": "EncodeX - TikTok Premium Uploader",
+  "version": "3.0",
+  "description": "TikTok Quality Patcher + FPS Manipulation. Upload Method @EncodexHD",
+  "permissions": [
+    "downloads",
+    "tabs",
+    "storage",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://*.tiktok.com/*",
+    "https://encodex-api-production.up.railway.app/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "EncodeX - Premium Uploader",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://www.tiktok.com/*",
+        "*://*.tiktok.com/*"
+      ],
+      "js": ["dynamic_island.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "*://www.tiktok.com/tiktokstudio/upload*",
+        "*://www.tiktok.com/upload*",
+        "*://www.tiktok.com/creator-center*",
+        "*://*.tiktok.com/upload*",
+        "*://*.tiktok.com/creator-center*"
+      ],
+      "js": ["inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://www.tiktok.com/tiktokstudio/upload*",
+        "*://www.tiktok.com/upload*",
+        "*://www.tiktok.com/creator-center*",
+        "*://*.tiktok.com/upload*",
+        "*://*.tiktok.com/creator-center*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://www.tiktok.com/@*"
+      ],
+      "js": ["content_repost.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["repost_injected.js", "dynamic_island.js", "icons/*"],
+      "matches": ["*://*.tiktok.com/*"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
