@@ -1,23 +1,23 @@
-let wasmPatcher = null;
-let selectedFile = null;
+/* ═══ WASM Patcher ═══ */
+var wasmPatcher = null;
+var selectedFile = null;
 
-/* ═══ WasmPatcher ═══ */
 async function initWasmPatcher() {
   try {
-    const res = await fetch(chrome.runtime.getURL('patcher.wasm'));
-    const bytes = await res.arrayBuffer();
-    const { instance } = await WebAssembly.instantiate(bytes, {});
-    const mem = instance.exports.memory;
-    const patch = instance.exports.patch;
+    var res = await fetch(chrome.runtime.getURL('patcher.wasm'));
+    var bytes = await res.arrayBuffer();
+    var inst = (await WebAssembly.instantiate(bytes, {})).instance;
+    var mem = inst.exports.memory;
+    var patchFn = inst.exports.patch;
     wasmPatcher = {
-      patch(buf) {
-        const src = new Uint8Array(buf);
-        const len = src.byteLength;
-        const need = Math.ceil(len / 65536);
-        const cur = mem.buffer.byteLength / 65536;
+      patch: function(buf) {
+        var src = new Uint8Array(buf);
+        var len = src.byteLength;
+        var need = Math.ceil(len / 65536);
+        var cur = mem.buffer.byteLength / 65536;
         if (need > cur) mem.grow(need - cur);
         new Uint8Array(mem.buffer, 0, len).set(src);
-        patch(len);
+        patchFn(len);
         return new Uint8Array(mem.buffer, 0, len).buffer;
       }
     };
@@ -29,19 +29,20 @@ async function initWasmPatcher() {
 }
 
 /* ═══ Elements ═══ */
-const fileInput = document.getElementById('fileInput');
-const uploadTrigger = document.getElementById('uploadTrigger');
-const patchBtn = document.getElementById('patchBtn');
-const fileNameDisplay = document.getElementById('fileNameDisplay');
-const statusText = document.getElementById('statusText');
-const statusBox = document.getElementById('status');
-const patchProgress = document.getElementById('patchProgress');
-const patchProgressBar = document.getElementById('patchProgressBar');
+var fileInput = document.getElementById('fileInput');
+var uploadTrigger = document.getElementById('uploadTrigger');
+var patchBtn = document.getElementById('patchBtn');
+var fileNameDisplay = document.getElementById('fileNameDisplay');
+var statusText = document.getElementById('statusText');
+var statusBox = document.getElementById('status');
+var patchProgress = document.getElementById('patchProgress');
+var patchProgressBar = document.getElementById('patchProgressBar');
 
 /* ═══ Helpers ═══ */
-const FORMATS = { mp4:'MP4', mov:'MOV', avi:'AVI', mkv:'MKV' };
-function getFmt(n) { const e = n.split('.').pop().toLowerCase(); return FORMATS[e] || null; }
-function fmtSize(b) { return (b/1048576).toFixed(1)+' MB'; }
+function getFmt(n) {
+  var e = n.split('.').pop().toLowerCase();
+  return { mp4:'MP4', mov:'MOV', avi:'AVI', mkv:'MKV' }[e] || null;
+}
 
 function setStatus(msg, state) {
   statusText.textContent = msg;
@@ -53,60 +54,52 @@ function setProgress(pct) {
   patchProgressBar.style.width = Math.min(100, pct) + '%';
 }
 
-/* ═══ Premium UI (visual only, blocking done by runtime.js) ═══ */
-function updatePremiumUI() {
-  const auth = window.__ENCODEX_AUTH;
-  const prem = auth && !!auth._a;
-  const lock = document.getElementById('patcherLockBadge');
-  const act = document.getElementById('patcherActiveBadge');
-  if (lock) lock.hidden = prem;
-  if (act) act.hidden = !prem;
-  // Enable button when file selected; runtime.js blocks non-premium via capture handler
-  patchBtn.disabled = !selectedFile;
-  patchBtn.classList.toggle('enabled', !!selectedFile);
-}
-
 /* ═══ File selection ═══ */
 function selectFile(file) {
-  const fmt = getFmt(file.name);
+  var fmt = getFmt(file.name);
   if (!fmt) {
-    setStatus('Unsupported format. Use MP4, MOV, AVI, or MKV.', 'error');
-    selectedFile = null; updatePremiumUI(); return;
+    setStatus('Unsupported format.', 'error');
+    selectedFile = null;
+    patchBtn.disabled = true;
+    patchBtn.classList.remove('enabled');
+    return;
   }
   if (file.size > 314572800) {
     setStatus('File exceeds 300 MB limit.', 'error');
-    selectedFile = null; updatePremiumUI(); return;
+    selectedFile = null;
+    patchBtn.disabled = true;
+    patchBtn.classList.remove('enabled');
+    return;
   }
   selectedFile = file;
-  fileNameDisplay.textContent = file.name + ' (' + fmtSize(file.size) + ')';
+  fileNameDisplay.textContent = file.name + ' (' + (file.size/1048576).toFixed(1) + ' MB)';
   fileNameDisplay.classList.add('has-file');
   fileNameDisplay.classList.remove('size-warn', 'size-danger');
   if (file.size > 209715200) fileNameDisplay.classList.add('size-danger');
   else if (file.size > 104857600) fileNameDisplay.classList.add('size-warn');
-  updatePremiumUI();
-  setStatus('Ready: ' + file.name + ' (' + fmt + ').', 'idle');
+  patchBtn.disabled = false;
+  patchBtn.classList.add('enabled');
+  setStatus('Ready: ' + file.name + ' (' + fmt + '). Click Patch & Download.', 'idle');
 }
 
 /* ═══ Patching ═══ */
 async function patchVideo() {
   if (!selectedFile) { setStatus('No file selected.', 'error'); return; }
-  if (!wasmPatcher) { setStatus('Patcher not loaded.', 'error'); return; }
-  const auth = window.__ENCODEX_AUTH;
-  if (!auth || !auth._a) { setStatus('Premium required.', 'error'); return; }
+  if (!wasmPatcher) { setStatus('Patcher not ready.', 'error'); return; }
   setProgress(0);
   setStatus('Reading file...', 'processing');
-  let buffer;
-  try { buffer = await selectedFile.arrayBuffer(); } catch (err) {
-    setStatus('Failed to read file.', 'error'); return;
+  var buffer;
+  try { buffer = await selectedFile.arrayBuffer(); } catch (e) {
+    setStatus('Failed to read file: ' + e.message, 'error'); return;
   }
   setProgress(35);
   setStatus('Patching video...', 'processing');
   try {
-    const patched = wasmPatcher.patch(buffer);
+    var patched = wasmPatcher.patch(buffer);
     setProgress(70);
-    const blob = new Blob([patched], { type: 'video/mp4' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    var blob = new Blob([patched], { type: 'video/mp4' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
     a.href = url;
     a.download = selectedFile.name.replace(/\.[^/.]+$/, '') + '_patched.mp4';
     document.body.appendChild(a);
@@ -114,17 +107,22 @@ async function patchVideo() {
     a.remove();
     URL.revokeObjectURL(url);
     setProgress(100);
-    setStatus('Done! Video patched and downloaded.', 'success');
-    setTimeout(function() { patchProgress.classList.remove('visible'); patchProgressBar.style.width = '0%'; }, 3500);
-  } catch (err) {
-    setStatus('Error: ' + (err.message || err), 'error');
+    setStatus('Success! Video patched and downloaded.', 'success');
+    setTimeout(function() {
+      patchProgress.classList.remove('visible');
+      patchProgressBar.style.width = '0%';
+    }, 3500);
+  } catch (e) {
+    setStatus('Error: ' + (e.message || e), 'error');
     patchProgress.classList.remove('visible');
   }
 }
 
 /* ═══ Events ═══ */
 uploadTrigger.addEventListener('click', function() { fileInput.click(); });
-fileInput.addEventListener('change', function() { if (fileInput.files && fileInput.files[0]) selectFile(fileInput.files[0]); });
+fileInput.addEventListener('change', function() {
+  if (fileInput.files && fileInput.files[0]) selectFile(fileInput.files[0]);
+});
 uploadTrigger.addEventListener('dragover', function(e) { e.preventDefault(); uploadTrigger.classList.add('drag-over'); });
 uploadTrigger.addEventListener('dragleave', function() { uploadTrigger.classList.remove('drag-over'); });
 uploadTrigger.addEventListener('drop', function(e) {
@@ -134,32 +132,8 @@ uploadTrigger.addEventListener('drop', function(e) {
 });
 patchBtn.addEventListener('click', patchVideo);
 
-/* ═══ Init ═══ */
-(function boot() {
-  // Start WASM init immediately
-  initWasmPatcher().then(function(ok) {
-    if (ok) {
-      setProgress(0);
-      setStatus('Ready — select a video.', 'idle');
-    } else {
-      setStatus('Patcher failed to load. Reload extension.', 'error');
-    }
-  });
-
-  // Poll for __ENCODEX_AUTH (set by runtime.js after session check)
-  var waitAuth = setInterval(function() {
-    if (window.__ENCODEX_AUTH) {
-      clearInterval(waitAuth);
-      updatePremiumUI();
-      var prev = window.__ENCODEX_AUTH._a;
-      setInterval(function() {
-        if (window.__ENCODEX_AUTH && window.__ENCODEX_AUTH._a !== prev) {
-          prev = window.__ENCODEX_AUTH._a;
-          updatePremiumUI();
-        }
-      }, 2000);
-    }
-  }, 200);
-  // Also check on first frame in case auth already set
-  updatePremiumUI();
-})();
+/* ═══ Boot ═══ */
+initWasmPatcher().then(function(ok) {
+  if (ok) setStatus('Ready — select a video.', 'idle');
+  else setStatus('Failed to load patcher.', 'error');
+});
