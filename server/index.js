@@ -53,12 +53,14 @@ async function init() {
   }
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT false`);
   await pool.query(`UPDATE users SET is_admin = true WHERE username = '1337vaporesso'`);
+  await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS hwid TEXT DEFAULT NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS keys (
       id SERIAL PRIMARY KEY,
       key_value VARCHAR(50) UNIQUE NOT NULL,
       used BOOLEAN DEFAULT false,
       used_by VARCHAR(50) DEFAULT NULL,
+      hwid TEXT DEFAULT NULL,
       created_at TIMESTAMP DEFAULT NOW()
     )
   `);
@@ -250,16 +252,38 @@ app.get('/api/me', auth, async (req, res) => {
 });
 app.post('/api/activate', auth, async (req, res) => {
   try {
-    const { key } = req.body;
+    const { key, hwid } = req.body;
     if (!key) return res.status(400).json({ ok: false, error: 'Key is required' });
     const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
     const user = userResult.rows[0];
-    if (user.premium) return res.json({ ok: true, username: user.username, premium: true });
+    if (user.premium) return res.json({ ok: true, username: user.username, premium: true, hwid_stored: true });
     const keyResult = await pool.query('SELECT * FROM keys WHERE key_value = $1 AND used = false', [key.toUpperCase()]);
     if (!keyResult.rows[0]) return res.status(400).json({ ok: false, error: 'Invalid or already used key' });
-    await pool.query('UPDATE keys SET used = true, used_by = $1 WHERE key_value = $2', [user.username, key.toUpperCase()]);
+    const hwidVal = hwid || null;
+    await pool.query(`UPDATE keys SET used = true, used_by = $1, hwid = COALESCE(NULLIF($3,''), hwid) WHERE key_value = $2`, [user.username, key.toUpperCase(), hwidVal]);
     await pool.query('UPDATE users SET premium = true, premium_key = $1 WHERE id = $2', [key.toUpperCase(), req.userId]);
-    res.json({ ok: true, username: user.username, premium: true });
+    res.json({ ok: true, username: user.username, premium: true, hwid_bound: !!hwidVal });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/verify-hwid', auth, async (req, res) => {
+  try {
+    const { hwid } = req.body;
+    if (!hwid) return res.status(400).json({ ok: false, error: 'HWID is required' });
+    const userResult = await pool.query('SELECT premium_key FROM users WHERE id = $1', [req.userId]);
+    const user = userResult.rows[0];
+    if (!user || !user.premium_key) return res.json({ ok: true, match: false, reason: 'no_key' });
+    const keyResult = await pool.query('SELECT hwid FROM keys WHERE key_value = $1', [user.premium_key]);
+    if (!keyResult.rows[0]) return res.json({ ok: true, match: false, reason: 'key_not_found' });
+    const storedHwid = keyResult.rows[0].hwid;
+    if (!storedHwid) {
+      await pool.query('UPDATE keys SET hwid = $1 WHERE key_value = $2', [hwid, user.premium_key]);
+      return res.json({ ok: true, match: true, bound: true });
+    }
+    if (storedHwid === hwid) return res.json({ ok: true, match: true });
+    return res.json({ ok: true, match: false, reason: 'hwid_mismatch' });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -317,6 +341,33 @@ app.post('/api/admin/grant-admin', auth, isAdmin, async function(req, res) {
     var result = await pool.query('UPDATE users SET is_admin = true WHERE username = $1 RETURNING id, username, is_admin', [username]);
     if (!result.rows[0]) return res.status(404).json({ ok: false, error: 'User not found' });
     res.json({ ok: true, user: result.rows[0] });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.post('/api/patcher', async function(req, res) {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(401).json({ ok: false, error: 'No token' });
+    let decoded;
+    try { decoded = jwt.verify(token, process.env.JWT_SECRET); } catch { return res.status(401).json({ ok: false, error: 'Invalid token' }); }
+    const userResult = await pool.query('SELECT premium FROM users WHERE id = $1', [decoded.id]);
+    if (!userResult.rows[0] || !userResult.rows[0].premium) return res.status(403).json({ ok: false, error: 'Premium required' });
+    const patcherPath = path.join(__dirname, 'patcher_source.js');
+    if (!fs.existsSync(patcherPath)) return res.status(500).json({ ok: false, error: 'Patcher source not found' });
+    const code = fs.readFileSync(patcherPath, 'utf8');
+    res.json({ ok: true, code });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/admin/reset-hwid', auth, isAdmin, async function(req, res) {
+  try {
+    var username = (req.body.username || '').toLowerCase().trim();
+    if (!username) return res.status(400).json({ ok: false, error: 'Username required' });
+    var userResult = await pool.query('SELECT premium_key FROM users WHERE username = $1', [username]);
+    if (!userResult.rows[0] || !userResult.rows[0].premium_key) return res.status(404).json({ ok: false, error: 'User has no premium key' });
+    await pool.query("UPDATE keys SET hwid = NULL WHERE key_value = $1", [userResult.rows[0].premium_key]);
+    res.json({ ok: true, message: 'HWID reset for ' + username });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -671,8 +722,16 @@ app.post('/api/process/quick', upload.single('video'), async (req, res) => {
     const inputPath = req.file.path;
     const sttsPath = path.join(OUTPUT_DIR, `stts_${req.file.filename}`);
     const outputPath = path.join(OUTPUT_DIR, `quick_${req.file.filename}`);
-    const itsscale = parseFloat(req.query.itsscale || req.body.itsscale || '2');
+    // Support both itsscale and fps parameter
+    let itscaleRaw = parseFloat(req.query.itsscale || req.body.itsscale || req.body.fps || '0');
+    // If fps was sent (0.5 = halve fps), convert: itscale = 1/fps
     const mode = req.query.mode || req.body.mode || 'hq';
+    if (req.body.fps !== undefined || req.query.fps !== undefined) {
+      itscaleRaw = itscaleRaw > 0 && itscaleRaw <= 1 ? Math.round(1 / itscaleRaw) : Math.max(1, Math.round(itscaleRaw));
+    } else if (itscaleRaw === 0) {
+      itscaleRaw = 2;
+    }
+    const itsscale = Math.max(1, Math.round(itscaleRaw));
 
     // Step 1: stts patch (fast binary manipulation)
     try {
