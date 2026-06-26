@@ -16,17 +16,57 @@
     (i32.store8 (i32.add (local.get $addr) (i32.const 2)) (i32.shr_u (local.get $val) (i32.const 8)))
     (i32.store8 (i32.add (local.get $addr) (i32.const 3)) (local.get $val)))
 
+  ;; Patch stts box: dataOff points to version byte (after 8-byte box header)
+  ;; Structure: version(1) + flags(3) + entry_count(4) + entries(8 each: sample_count+sample_delta)
   (func $patchStts (param $dataOff i32)
-    (i32.store8 (local.get $dataOff) (i32.const 0))
-    (i32.store8 (i32.add (local.get $dataOff) (i32.const 1)) (i32.const 0))
-    (i32.store8 (i32.add (local.get $dataOff) (i32.const 2)) (i32.const 0))
-    (i32.store8 (i32.add (local.get $dataOff) (i32.const 3)) (i32.const 0))
-    (call $writeBE32 (i32.add (local.get $dataOff) (i32.const 4)) (i32.const 1))
-    (call $writeBE32 (i32.add (local.get $dataOff) (i32.const 8)) (i32.const 1)))
+    (local $entryCount i32) (local $i i32) (local $totalSamples i32)
+    (local $countAddr i32) (local $firstDelta i32)
 
+    (local.set $entryCount (call $readBE32 (i32.add (local.get $dataOff) (i32.const 4))))
+
+    ;; Guard: entryCount too large or zero
+    (if (i32.eqz (local.get $entryCount)) (then (return)))
+    (if (i32.gt_u (local.get $entryCount) (i32.const 100000)) (then (return)))
+
+    ;; Check if already patched: entryCount==1 && first sample_delta==1
+    (if (i32.eq (local.get $entryCount) (i32.const 1))
+      (then
+        (local.set $firstDelta (call $readBE32 (i32.add (local.get $dataOff) (i32.const 12))))
+        (if (i32.eq (local.get $firstDelta) (i32.const 1)) (then (return)))))
+
+    ;; Sum total sample_count across all entries
+    (local.set $i (i32.const 0))
+    (local.set $totalSamples (i32.const 0))
+    (block $done
+      (loop $loop
+        (i32.ge_u (local.get $i) (local.get $entryCount)) (br_if $done)
+        (local.set $countAddr (i32.add (local.get $dataOff) (i32.const 8)))
+        (local.set $countAddr (i32.add (local.get $countAddr) (i32.mul (local.get $i) (i32.const 8))))
+        (local.set $totalSamples (i32.add (local.get $totalSamples) (call $readBE32 (local.get $countAddr))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+
+    ;; Guard: totalSamples range check
+    (if (i32.eqz (local.get $totalSamples)) (then (return)))
+    (if (i32.gt_u (local.get $totalSamples) (i32.const 1000000)) (then (return)))
+
+    ;; Preserve version+flags at dataOff+0..3 (don't touch)
+    ;; Write entry_count = 1
+    (call $writeBE32 (i32.add (local.get $dataOff) (i32.const 4)) (i32.const 1))
+    ;; Write sample_count = totalSamples
+    (call $writeBE32 (i32.add (local.get $dataOff) (i32.const 8)) (local.get $totalSamples))
+    ;; Write sample_delta = 1
+    (call $writeBE32 (i32.add (local.get $dataOff) (i32.const 12)) (i32.const 1)))
+
+  ;; Patch mdhd box: dataOff points to version byte (after 8-byte box header)
+  ;; Structure: version(1) + flags(3) + ...
+  ;; v0: creation_time(4) + modification_time(4) + timescale(4) + duration(4)
+  ;; v1: creation_time(8) + modification_time(8) + timescale(4) + duration(8)
+  ;; Offsets from dataOff: v0 ts=12 dur=16, v1 ts=20 dur=28(low 32 bits of 64-bit duration)
   (func $patchMdhd (param $dataOff i32)
     (local $ver i32) (local $tsOff i32) (local $durOff i32)
     (local $origTS i32) (local $origDur i32) (local $newDur i32)
+    (local $tmp64 i64)
 
     (local.set $ver (i32.load8_u (local.get $dataOff)))
     (if (i32.eqz (local.get $ver))
@@ -35,12 +75,20 @@
         (local.set $durOff (i32.add (local.get $dataOff) (i32.const 16))))
       (else
         (local.set $tsOff (i32.add (local.get $dataOff) (i32.const 20)))
-        (local.set $durOff (i32.add (local.get $dataOff) (i32.const 24)))))
+        (local.set $durOff (i32.add (local.get $dataOff) (i32.const 28)))))
 
     (local.set $origTS (call $readBE32 (local.get $tsOff)))
+    (if (i32.eq (local.get $origTS) (i32.const 60000)) (then (return)))
+
     (local.set $origDur (call $readBE32 (local.get $durOff)))
-    (local.set $newDur
-      (i32.div_u (i32.mul (local.get $origDur) (i32.const 60000)) (local.get $origTS)))
+
+    ;; newDur = round(origDur * 60000 / origTS)
+    ;; Use i64 to avoid overflow: (origDur * 60000 + origTS/2) / origTS
+    (local.set $tmp64 (i64.mul (i64.extend_i32_u (local.get $origDur)) (i64.const 60000)))
+    (local.set $tmp64 (i64.add (local.get $tmp64) (i64.extend_i32_u (i32.shr_u (local.get $origTS) (i32.const 1)))))
+    (local.set $tmp64 (i64.div_u (local.get $tmp64) (i64.extend_i32_u (local.get $origTS))))
+    (local.set $newDur (i32.wrap_i64 (local.get $tmp64)))
+
     (call $writeBE32 (local.get $tsOff) (i32.const 60000))
     (call $writeBE32 (local.get $durOff) (local.get $newDur)))
 
