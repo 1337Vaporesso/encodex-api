@@ -715,53 +715,27 @@ app.get('/api/process/result', async (req, res) => {
   }
 });
 
-// ---- QUICK PROCESS (no auth, no DB, just upload + process + download) ----
-app.post('/api/process/quick', upload.single('video'), async (req, res) => {
+// ---- QUICK PROCESS (auth required, stts-only, no ffmpeg) ----
+app.post('/api/process/quick', auth, upload.single('video'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file' });
     const inputPath = req.file.path;
-    const sttsPath = path.join(OUTPUT_DIR, `stts_${req.file.filename}`);
-    const outputPath = path.join(OUTPUT_DIR, `quick_${req.file.filename}`);
-    // Support both itsscale and fps parameter
-    let itscaleRaw = parseFloat(req.query.itsscale || req.body.itsscale || req.body.fps || '0');
-    // If fps was sent (0.5 = halve fps), convert: itscale = 1/fps
-    const mode = req.query.mode || req.body.mode || 'hq';
-    if (req.body.fps !== undefined || req.query.fps !== undefined) {
-      itscaleRaw = itscaleRaw > 0 && itscaleRaw <= 1 ? Math.round(1 / itscaleRaw) : Math.max(1, Math.round(itscaleRaw));
-    } else if (itscaleRaw === 0) {
-      itscaleRaw = 2;
-    }
-    const itsscale = Math.max(1, Math.round(itscaleRaw));
+    const outputPath = path.join(OUTPUT_DIR, `stts_${req.file.filename}`);
 
-    // Step 1: stts patch (fast binary manipulation)
-    try {
-      const { patchStts } = require('./stts_patcher');
-      patchStts(inputPath, sttsPath);
-    } catch (e) {
-      console.warn('[EncodeX] stts patch failed:', e.message);
-      // Fallback: use input directly
-      fs.copyFileSync(inputPath, sttsPath);
-    }
-
-    // Step 2: ffmpeg -itsscale remux
-    if (mode === 'copy') {
-      await execFFmpegSimple(['-y', '-i', sttsPath, '-c:v', 'copy', '-c:a', 'copy', outputPath]);
-    } else {
-      await execFFmpegSimple(['-y', '-itsscale', String(itsscale), '-i', sttsPath, '-c:v', 'copy', '-c:a', 'copy', outputPath]);
-    }
+    // Only stts patching (fast binary manipulation, no ffmpeg)
+    const { patchStts } = require('./stts_patcher');
+    const patched = patchStts(inputPath, outputPath);
 
     if (!fs.existsSync(outputPath)) throw new Error('Output not found');
     const stat = await fs.promises.stat(outputPath);
     res.writeHead(200, {
       'Content-Type': 'video/mp4',
-      'Content-Length': stat.size,
-      'Content-Disposition': 'attachment; filename="video.mp4"'
+      'Content-Disposition': 'attachment; filename="patched_video.mp4"'
     });
     const stream = fs.createReadStream(outputPath);
     stream.pipe(res);
     stream.on('end', () => {
       fs.unlink(inputPath, () => {});
-      try { fs.unlinkSync(sttsPath); } catch(e) {}
       setTimeout(() => fs.unlink(outputPath, () => {}), 60000);
     });
   } catch (e) {

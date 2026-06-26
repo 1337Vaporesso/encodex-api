@@ -136,7 +136,7 @@
     ::-webkit-scrollbar-thumb { background: var(--accent-glow); border-radius: 10px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
-    /* ── Gradient Background (animated) ── */
+    /* ── Gradient Background ── */
     .bg-gradient {
       position: fixed; inset: 0; z-index: 0;
       background: linear-gradient(160deg, var(--lock-bg-1) 0%, var(--lock-bg-2) 50%, var(--lock-bg-3) 100%);
@@ -145,14 +145,13 @@
     .bg-gradient::before {
       content: ''; position: fixed; top: -30%; left: -20%; width: 140%; height: 130%;
       background: radial-gradient(ellipse at 30% 20%, var(--accent-glow) 0%, transparent 60%);
-      opacity: 0.25; animation: ambientDrift 8s ease-in-out infinite alternate;
+      opacity: 0.25; animation: ambientDrift 10s ease-in-out infinite alternate;
       pointer-events: none;
     }
     @keyframes ambientDrift {
-      0%   { transform: translate(0,0) scale(1); opacity: 0.15; filter: hue-rotate(0deg); }
-      33%  { transform: translate(5%,3%) scale(1.06); opacity: 0.28; filter: hue-rotate(8deg); }
-      66%  { transform: translate(-3%,-2%) scale(0.94); opacity: 0.20; filter: hue-rotate(-5deg); }
-      100% { transform: translate(2%,-4%) scale(1.02); opacity: 0.25; filter: hue-rotate(3deg); }
+      0%   { transform: translate(0,0) scale(1); opacity: 0.20; }
+      50%  { transform: translate(4%,2%) scale(1.04); opacity: 0.30; }
+      100% { transform: translate(-2%,-1%) scale(0.96); opacity: 0.18; }
     }
 
     /* ══════════════════════ THEME PICKER ══════════════════════ */
@@ -218,18 +217,7 @@
       transition: opacity 0.5s cubic-bezier(0.34,1.56,0.64,1), transform 0.5s cubic-bezier(0.34,1.56,0.64,1), backdrop-filter 0.5s;
       will-change: transform, opacity;
     }
-    .lock-screen::before {
-      content: ''; position: absolute; inset: -50%; z-index: -1;
-      background: radial-gradient(ellipse at 50% 40%, var(--accent-glow) 0%, transparent 50%);
-      animation: lockBreathe 4s ease-in-out infinite;
-      pointer-events: none;
-    }
-    @keyframes lockBreathe {
-      0%, 100% { transform: scale(1); opacity: 0.3; }
-      50%      { transform: scale(1.15); opacity: 0.6; }
-    }
     .lock-screen.lock-hidden { opacity: 0; transform: scale(0.94); pointer-events: none; }
-    .lock-screen.lock-hidden::before { animation: none; opacity: 0; }
     .lock-date {
       font-family: var(--f-display); font-weight: 500; font-size: 14px;
       color: var(--lock-date-color); letter-spacing: 0.4px; margin-bottom: 4px;
@@ -325,12 +313,7 @@
       font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
       color: #fff; text-transform: uppercase; position: relative;
       overflow: hidden; flex-shrink: 0;
-      box-shadow: 0 0 20px var(--accent-glow);
-      animation: badgeGlow 2s ease-in-out infinite;
-    }
-    @keyframes badgeGlow {
-      0%, 100% { box-shadow: 0 0 16px var(--accent-glow); }
-      50%      { box-shadow: 0 0 28px var(--accent-glow), 0 0 60px rgba(139,92,246,0.1); }
+      box-shadow: 0 0 16px var(--accent-glow);
     }
     .premium-badge::before {
       content: ''; position: absolute; inset: 0;
@@ -460,20 +443,13 @@
       background-clip: text;
     }
 
-    /* ── Card (glass) ── */
+    /* ── Card ── */
     .card {
-      background: color-mix(in srgb, var(--surface) 80%, transparent);
-      backdrop-filter: blur(var(--card-blur)) saturate(1.6);
-      -webkit-backdrop-filter: blur(var(--card-blur)) saturate(1.6);
+      background: var(--surface); backdrop-filter: blur(var(--card-blur));
+      -webkit-backdrop-filter: blur(var(--card-blur));
       border: 1px solid var(--border); border-radius: var(--card-radius);
       box-shadow: var(--shadow-md);
-      transition: all 0.3s cubic-bezier(0.16,1,0.3,1);
-      position: relative; overflow: hidden;
-    }
-    .card::before {
-      content: ''; position: absolute; inset: 0; border-radius: inherit;
-      background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, transparent 50%);
-      pointer-events: none;
+      transition: all 0.25s cubic-bezier(0.16,1,0.3,1);
     }
     .card:hover {
       border-color: var(--border-lt); box-shadow: var(--shadow-lg);
@@ -651,11 +627,8 @@
     }
     .profile-avatar-ring {
       position: absolute; inset: -3px; border-radius: 50%;
-      border: 2px solid transparent;
-      background: linear-gradient(var(--bg), var(--bg)) padding-box, var(--accent-gradient) border-box;
-      opacity: 0.6; animation: ringSpin 3s linear infinite;
+      border: 2px solid var(--border-accent); opacity: 0.5;
     }
-    @keyframes ringSpin { to { transform: rotate(360deg); } }
     .profile-username { font-size: 16px; font-weight: 700; color: var(--text); }
     .profile-user-tag { font-size: 11px; color: var(--text2); margin-top: 2px; }
 
@@ -708,7 +681,6 @@
       background: var(--accent-gradient); color: #fff; border-color: transparent;
       box-shadow: 0 4px 16px var(--accent-glow);
     }
-    .profile-btn.primary:hover { box-shadow: 0 6px 24px var(--accent-glow); }
     .profile-btn.primary:hover { filter: brightness(1.10); transform: translateY(-1px); }
     .profile-btn.ghost { background: transparent; color: var(--text2); border-color: var(--border); }
     .profile-btn.ghost:hover { background: var(--surface-hover); color: var(--text); }
@@ -805,22 +777,16 @@
     .nav-btn.active {
       background: var(--accent-glow); color: var(--accent);
     }
-    .nav-btn.active svg { animation: navIconBounce 0.4s cubic-bezier(0.34,1.56,0.64,1); }
-    @keyframes navIconBounce {
-      0% { transform: scale(1); }
-      40% { transform: scale(1.18); }
-      100% { transform: scale(1); }
-    }
     .nav-btn:hover:not(.active) { color: var(--text2); }
     .nav-btn:active { transform: scale(0.94); }
-    .nav-btn svg { flex-shrink: 0; transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); }
+    .nav-btn svg { flex-shrink: 0; }
 
     /* ══════════════════════ TOAST ══════════════════════ */
     .toast {
       position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
-      z-index: 99999; padding: 8px 16px; border-radius: 12px;
-      background: color-mix(in srgb, var(--bg) 80%, transparent);
-      backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+      z-index: 99999; padding: 8px 16px; border-radius: 10px;
+      background: color-mix(in srgb, var(--bg) 92%, transparent);
+      backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
       border: 1px solid var(--border); color: var(--text);
       font-size: 11px; font-weight: 600; pointer-events: none;
       box-shadow: 0 8px 32px rgba(0,0,0,0.25);
@@ -834,23 +800,6 @@
       from { transform: translateX(-50%) translateY(16px) scale(0.94); opacity: 0; }
       to   { transform: translateX(-50%) translateY(0) scale(1); opacity: 1; }
     }
-
-    /* ═══ Loader Skeleton ═══ */
-    .loader-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 28px 0; gap: 14px; }
-    .loader-spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; box-shadow: 0 0 20px var(--accent-glow); }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .loader-text { font-size: 11px; color: var(--text3); font-weight: 500; letter-spacing: 0.3px; animation: loaderPulse 1.6s ease-in-out infinite; }
-    @keyframes loaderPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.7; } }
-    .loader-skeleton { width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
-    .loader-skeleton-bar { height: 42px; border-radius: 12px; background: var(--surface); position: relative; overflow: hidden; }
-    .loader-skeleton-bar::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent); transform: translateX(-100%); animation: shimmer 1.8s ease-in-out infinite; }
-    @keyframes shimmer { 0% { transform: translateX(-100%); } 50% { transform: translateX(100%); } 100% { transform: translateX(100%); } }
-    .loader-skeleton-bar.sm { height: 16px; width: 60%; align-self: center; }
-
-    /* ═══ Ripple Effect ═══ */
-    .ripple { position: relative; overflow: hidden; }
-    .ripple::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: radial-gradient(circle at var(--rx, 50%) var(--ry, 50%), rgba(255,255,255,0.15) 0%, transparent 60%); opacity: 0; transition: opacity 0.4s; pointer-events: none; }
-    .ripple:active::after { opacity: 1; transition: opacity 0s; }
 
     /* ═══ Size Warning (hidden, required) ═══ */
     #sizeWarning { display: none !important; }
@@ -962,16 +911,7 @@
                 Active
               </span>
             </div>
-            <div class="loader-wrap" id="patcherLoader" style="display:none">
-              <div class="loader-spinner"></div>
-              <div class="loader-text">Loading patcher...</div>
-              <div class="loader-skeleton">
-                <div class="loader-skeleton-bar"></div>
-                <div class="loader-skeleton-bar sm"></div>
-                <div class="loader-skeleton-bar"></div>
-              </div>
-            </div>
-            <button class="upload-btn ripple" id="uploadTrigger" type="button" hidden>
+            <button class="upload-btn" id="uploadTrigger" type="button">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
               </svg>
@@ -995,7 +935,7 @@
             <div id="status" class="status-box" data-state="idle">Ready — select a video to begin.</div>
           </div>
 
-          <button class="action-btn ripple" id="patchBtn" disabled type="button">
+          <button class="action-btn" id="patchBtn" disabled type="button">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
             </svg>
@@ -1034,7 +974,7 @@
                 Active
               </span>
             </div>
-            <button class="upload-btn ripple" id="ffmpegUploadTrigger" type="button">
+            <button class="upload-btn" id="ffmpegUploadTrigger" type="button">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>
               </svg>
@@ -1087,7 +1027,7 @@
             <div id="ffmpegStatus" class="status-box" data-state="idle">Ready — select a video to begin.</div>
           </div>
 
-          <button class="action-btn blue-btn ripple" id="ffmpegPatchBtn" disabled type="button">
+          <button class="action-btn blue-btn" id="ffmpegPatchBtn" disabled type="button">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
             </svg>
