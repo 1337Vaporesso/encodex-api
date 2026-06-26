@@ -1,73 +1,99 @@
 (function(){
-var API = 'https://encodex-api-production.up.railway.app';
 var fileInput = document.getElementById('fileInput');
-var ffmpegInput = document.getElementById('ffmpegFileInput');
-var fileName = document.getElementById('fileNameDisplay');
-var ffmpegName = document.getElementById('ffmpegFileNameDisplay');
 var patchBtn = document.getElementById('patchBtn');
-var ffmpegBtn = document.getElementById('ffmpegPatchBtn');
 var uploadTrigger = document.getElementById('uploadTrigger');
-var ffmpegUpload = document.getElementById('ffmpegUploadTrigger');
+var fileName = document.getElementById('fileNameDisplay');
 
-function _c(msg, type) {
-  var t = document.createElement('div');
-  t.className = 'toast ' + (type || 'info');
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(function() { t.remove(); }, 3000);
+function _c(m,t){
+  var e=document.createElement('div');
+  e.className='toast '+(t||'info');
+  e.textContent=m; document.body.appendChild(e);
+  setTimeout(function(){e.remove()},3000);
 }
 
-patchBtn.addEventListener('click', function() { processVideo('quick'); });
-ffmpegBtn.addEventListener('click', function() { processVideo('ffmpeg'); });
+function rs(v,p){return String.fromCharCode(v.getUint8(p),v.getUint8(p+1),v.getUint8(p+2),v.getUint8(p+3))}
 
-function processVideo(mode) {
-  var input = mode === 'quick' ? fileInput : ffmpegInput;
-  var file = input.files[0];
-  if (!file) { _c('Select a video first', 'error'); return; }
-  var btn = mode === 'quick' ? patchBtn : ffmpegBtn;
-  var oldText = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Processing...';
-  chrome.storage.local.get('encodex_token', function(r) {
-    if (!r || !r.encodex_token) { btn.disabled = false; btn.textContent = oldText; _c('Login required', 'error'); return; }
-    var fd = new FormData();
-    fd.append('video', file);
-    var controller = new AbortController();
-    var timeout = setTimeout(function() { controller.abort(); }, 120000);
-    fetch(API + '/api/process/' + mode, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + r.encodex_token },
-      body: fd,
-      signal: controller.signal
-    }).then(function(r2) {
-      clearTimeout(timeout);
-      if (!r2.ok) { throw new Error('Server error: ' + r2.status); }
-      return r2.blob();
-    }).then(function(blob) {
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url; a.download = 'encoded_' + file.name;
-      document.body.appendChild(a); a.click();
-      a.remove(); URL.revokeObjectURL(url);
-      btn.disabled = false; btn.textContent = oldText;
-      _c('Done!', 'success');
-    }).catch(function(e) {
-      clearTimeout(timeout);
-      btn.disabled = false; btn.textContent = oldText;
-      if (e.name === 'AbortError') { _c('Request timed out', 'error'); }
-      else { _c(e.message || 'Server error', 'error'); }
-    });
-  });
+function findStts(buf){
+  function parse(offset,limit){
+    var boxes=[],pos=offset,dv=new DataView(buf);
+    while(pos+8<=limit){
+      var size=dv.getUint32(pos),type=rs(dv,pos+4);
+      if(size===0)break;
+      if(size<8){pos+=8;continue}
+      var end=Math.min(pos+size,limit);
+      if(type==='stts')return{offset:pos,size:end-pos};
+      if(type==='moov'||type==='trak'||type==='mdia'||type==='minf'||type==='stbl'){
+        var r=parse(pos+8,end);
+        if(r)return r;
+      }
+      pos=end;
+    }
+    return null;
+  }
+  return parse(0,buf.byteLength);
 }
 
-fileInput.addEventListener('change', function() {
-  var f = this.files[0];
-  if (f) fileName.textContent = f.name + ' (' + (f.size / 1024 / 1024).toFixed(1) + ' MB)';
-});
-ffmpegInput.addEventListener('change', function() {
-  var f = this.files[0];
-  if (f) ffmpegName.textContent = f.name + ' (' + (f.size / 1024 / 1024).toFixed(1) + ' MB)';
+function patchVideo(buf){
+  var stts=findStts(buf);
+  if(!stts)return null;
+  var dv=new DataView(buf);
+  var off=stts.offset+8;
+  var entryCount=dv.getUint32(off+4);
+  if(entryCount===0||entryCount>100000)return null;
+  if(entryCount===1&&dv.getUint32(off+12)===1)return null;
+  var total=0,p=off+8;
+  for(var i=0;i<entryCount;i++){total+=dv.getUint32(p);p+=8}
+  if(total===0||total>1000000)return null;
+  var oldSize=stts.size,newSize=24,sizeDiff=oldSize-newSize;
+  var vf=dv.getUint32(off);
+  var src=new Uint8Array(buf);
+  var out=new Uint8Array(buf.byteLength-sizeDiff);
+  var pos=0;
+  out.set(src.subarray(0,stts.offset),pos);pos+=stts.offset;
+  var hdr=new Uint8Array(8);var hdv=new DataView(hdr.buffer);
+  hdv.setUint32(0,newSize);hdr[4]=115;hdr[5]=116;hdr[6]=116;hdr[7]=115;
+  out.set(hdr,pos);pos+=8;
+  var b0=new Uint8Array(8);var b0v=new DataView(b0.buffer);
+  b0v.setUint32(0,vf);b0v.setUint32(4,1);
+  out.set(b0,pos);pos+=8;
+  var b1=new Uint8Array(8);var b1v=new DataView(b1.buffer);
+  b1v.setUint32(0,total);b1v.setUint32(4,1);
+  out.set(b1,pos);pos+=8;
+  out.set(src.subarray(stts.offset+oldSize),pos);
+  return out.buffer;
+}
+
+patchBtn.addEventListener('click',function(){
+  var file=fileInput.files[0];
+  if(!file){_c('Select a video first','error');return}
+  var btn=patchBtn;
+  btn.disabled=true;btn.textContent='Processing...';
+  var fr=new FileReader();
+  fr.onload=function(){
+    var patched=patchVideo(fr.result);
+    if(!patched){
+      btn.disabled=false;btn.textContent='Patch & Download';
+      _c('Already patched or unsupported','info');return;
+    }
+    var blob=new Blob([patched],{type:'video/mp4'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url;a.download='encoded_'+file.name;
+    document.body.appendChild(a);a.click();
+    a.remove();URL.revokeObjectURL(url);
+    btn.disabled=false;btn.textContent='Patch & Download';
+    _c('Done!','success');
+  };
+  fr.onerror=function(){
+    btn.disabled=false;btn.textContent='Patch & Download';
+    _c('Error reading file','error');
+  };
+  fr.readAsArrayBuffer(file);
 });
 
-uploadTrigger.addEventListener('click', function() { fileInput.click(); });
-ffmpegUpload.addEventListener('click', function() { ffmpegInput.click(); });
+fileInput.addEventListener('change',function(){
+  var f=this.files[0];
+  if(f)fileName.textContent=f.name+' ('+(f.size/1024/1024).toFixed(1)+' MB)';
+});
+uploadTrigger.addEventListener('click',function(){fileInput.click()});
 })();
