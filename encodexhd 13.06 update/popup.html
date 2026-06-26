@@ -487,9 +487,28 @@
     .file-name-display {
       margin-top: 8px; padding: 10px 12px; background: var(--surface);
       border: 1px solid var(--border); border-radius: 12px;
-      font-size: 11px; color: var(--text2); font-weight: 400;
+      font-size: 11px; color: var(--text2); font-weight: 400; transition: all 250ms;
     }
     .file-name-display.has-file { color: var(--text); }
+    .file-name-display.size-warn { border-color: #f59e0b; color: #f59e0b; }
+    .file-name-display.size-danger { border-color: var(--error); color: var(--error); }
+
+    /* ── Format badges ── */
+    .format-badges { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+    .format-badge {
+      padding: 2px 8px; border-radius: 6px; font-size: 8px; font-weight: 700;
+      letter-spacing: 0.06em; text-transform: uppercase;
+      background: var(--surface); border: 1px solid var(--border); color: var(--text3);
+    }
+
+    /* ── Success animation ── */
+    @keyframes checkmark {
+      0%   { stroke-dashoffset: 50; }
+      100% { stroke-dashoffset: 0; }
+    }
+    .status-box[data-state="success"] .check-icon { display: inline; }
+    .check-icon { display: none; vertical-align: middle; margin-right: 4px; }
+    .check-icon path { fill: none; stroke: var(--success); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 50; stroke-dashoffset: 50; animation: checkmark 0.4s ease forwards; }
 
     .info-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
     .info-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
@@ -933,6 +952,12 @@
               <span class="drop-zone-hint">MP4, MOV, AVI — up to 300 MB</span>
             </div>
             <div class="file-name-display" id="fileNameDisplay">No file selected...</div>
+            <div class="format-badges">
+              <span class="format-badge">MP4</span>
+              <span class="format-badge">MOV</span>
+              <span class="format-badge">AVI</span>
+              <span class="format-badge">MKV</span>
+            </div>
             <div class="info-row">
               <div class="info-cell">
                 <div class="info-cell-label">Mode</div>
@@ -947,7 +972,10 @@
 
           <div class="card status-card">
             <div class="status-card-label">Process</div>
-            <div id="status" class="status-box" data-state="idle">Ready — select or drop a video to begin.</div>
+            <div id="status" class="status-box" data-state="idle">
+              <svg class="check-icon" width="14" height="14" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+              <span id="statusText">Ready — select or drop a video to begin.</span>
+            </div>
             <div class="progress-wrap" id="patchProgress">
               <div class="progress-bar" id="patchProgressBar"></div>
             </div>
