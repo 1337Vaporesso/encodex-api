@@ -25,10 +25,8 @@
     var input = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
     var len = input.length;
 
-    // Copy input into WASM memory
+    // WASM memory buffer for data/scratch/output
     var mem = new Uint8Array(w.mem.buffer);
-    var inputOff = 1024;
-    mem.set(input, inputOff);
 
     // === JS does the box tree parsing (generic MP4) ===
     function rb(o, end) {
