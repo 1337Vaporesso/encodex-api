@@ -109,7 +109,7 @@
     var otherStcoBoxes = allStco.filter(function(s){return s !== stco});
     var other = roots.filter(function(x){return !["ftyp","moov","mdat"].includes(x.t)}).map(bb);
 
-    var sd = 1500;
+    var sd = w.getVideoSampleDelta();
     var ec = r32(input, stts.cs+4);
     if (ec>=1) { var fd2=r32(input, stts.cs+8+4); if(fd2>0) sd=fd2; }
 
