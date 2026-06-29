@@ -554,26 +554,9 @@ patchBtn.addEventListener("click", async () => {
   if (!selectedFile) return;
   setStatus("scanning", "processing");
   try {
-    const API = 'https://encodex-api-production.up.railway.app';
-    const token = await new Promise(function(resolve) {
-      chrome.storage.local.get("encodex_token", function(res) {
-        resolve(res.encodex_token || null);
-      });
-    });
-    if (!token) throw new Error("Not logged in. Open settings to login.");
-    const formData = new FormData();
-    formData.append("video", selectedFile);
-    const resp = await fetch(API + "/api/process/quick", {
-      method: "POST",
-      headers: { "Authorization": "Bearer " + token },
-      body: formData
-    });
-    if (!resp.ok) {
-      let errMsg = "Server error: " + resp.status;
-      try { const errData = await resp.json(); errMsg = errData.error || errMsg; } catch(e) {}
-      throw new Error(errMsg);
-    }
-    const blob = await resp.blob();
+    const buf = await selectedFile.arrayBuffer();
+    const result = patchSharkSampleTableMethod(buf);
+    const blob = new Blob([result.output], { type: selectedFile.type || "video/mp4" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
