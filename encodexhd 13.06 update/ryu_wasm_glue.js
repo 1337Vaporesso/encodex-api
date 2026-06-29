@@ -24,11 +24,8 @@
     var w = await loadWasm();
     var input = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
     var len = input.length;
-
-    // WASM memory buffer for data/scratch/output
     var mem = new Uint8Array(w.mem.buffer);
 
-    // === JS does the box tree parsing (generic MP4) ===
     function rb(o, end) {
       var sz = r32(input, o);
       var ty = gt(input, o+4);
@@ -109,59 +106,87 @@
     var sce = pStsc(stsc.o);
     var sco = pStco(stco.o);
     var allStco = cStco(moov);
+    var otherStcoBoxes = allStco.filter(function(s){return s !== stco});
     var other = roots.filter(function(x){return !["ftyp","moov","mdat"].includes(x.t)}).map(bb);
 
-    // === Use WASM for constants and box builders ===
-    var fcVal = w.getFakeSampleCount();   // 8573 from WASM
-    var fsVal = w.getFakeSampleSize();    // 8 from WASM
-    var vsdVal = w.getVideoSampleDelta(); // 1500 from WASM
-    var fakeBytesPtr = w.getFakeSampleBytesPtr();
-
-    var sd = vsdVal;
+    var sd = 1500;
     var ec = r32(input, stts.cs+4);
     if (ec>=1) { var fd2=r32(input, stts.cs+8+4); if(fd2>0) sd=fd2; }
 
-    function wb(arr) { var p=16384; mem.set(arr, p); return p; }
-    function wr(p) { var mem2=new Uint8Array(w.mem.buffer); return mem2.slice(98304, p); }
+    // Write all data arrays to WASM memory, returns parameter object for buildReps
+    function prepareData() {
+      var p = 16384;
+      var d = {};
+
+      var md = bp(mdhd);
+      mem.set(md, p); d.mdhdPtr = p; d.mdhdLen = md.length; p += md.length;
+
+      var el = bp(elst);
+      mem.set(el, p); d.elstPtr = p; d.elstLen = el.length; p += el.length;
+
+      var sizesPos = p;
+      for (var i = 0; i < ss.length; i++) { var v = be32(ss[i]); mem[p]=v[0]; mem[p+1]=v[1]; mem[p+2]=v[2]; mem[p+3]=v[3]; p += 4; }
+      d.sizesPtr = sizesPos; d.ssLen = ss.length;
+
+      var stscPos = p;
+      for (var i = 0; i < sce.length; i++) {
+        var e = sce[i];
+        var v1 = be32(e[0]); mem[p]=v1[0]; mem[p+1]=v1[1]; mem[p+2]=v1[2]; mem[p+3]=v1[3];
+        var v2 = be32(e[1]); mem[p+4]=v2[0]; mem[p+5]=v2[1]; mem[p+6]=v2[2]; mem[p+7]=v2[3];
+        var v3 = be32(e[2]); mem[p+8]=v3[0]; mem[p+9]=v3[1]; mem[p+10]=v3[2]; mem[p+11]=v3[3];
+        p += 12;
+      }
+      d.stscPtr = stscPos; d.scLen = sce.length;
+
+      var vStcoPos = p;
+      for (var i = 0; i < sco.length; i++) { var v = be32(sco[i]); mem[p]=v[0]; mem[p+1]=v[1]; mem[p+2]=v[2]; mem[p+3]=v[3]; p += 4; }
+      d.videoStcoPtr = vStcoPos; d.videoStcoLen = sco.length;
+
+      d.otherStco = [];
+      for (var j = 0; j < otherStcoBoxes.length && j < 4; j++) {
+        var offs = pStco(otherStcoBoxes[j].o);
+        var ptr = p;
+        for (var i = 0; i < offs.length; i++) { var v = be32(offs[i]); mem[p]=v[0]; mem[p+1]=v[1]; mem[p+2]=v[2]; mem[p+3]=v[3]; p += 4; }
+        d.otherStco.push({ptr: ptr, len: offs.length});
+      }
+      while (d.otherStco.length < 4) d.otherStco.push({ptr: 0, len: 0});
+
+      d.cc = sco.length;
+      return d;
+    }
+
+    var data = prepareData();
 
     function buildReps(delta, fakeOff) {
+      var endPos = w.buildReps(
+        131072, delta, fakeOff,
+        data.mdhdPtr, data.mdhdLen,
+        data.elstPtr, data.elstLen,
+        data.sizesPtr, data.ssLen,
+        sd,
+        data.stscPtr, data.scLen, data.cc,
+        data.videoStcoPtr, data.videoStcoLen,
+        data.otherStco[0].ptr, data.otherStco[0].len,
+        data.otherStco[1].ptr, data.otherStco[1].len,
+        data.otherStco[2].ptr, data.otherStco[2].len,
+        data.otherStco[3].ptr, data.otherStco[3].len
+      );
+
       var reps = new Map();
-      // mdhd
-      var md = bp(mdhd); wb(md);       reps.set(mdhd, wr(w.buildMdhd(98304, 16384, md.length)));
-      // elst
-      var el = bp(elst); wb(el);       reps.set(elst, wr(w.buildElst(98304, 16384, el.length)));
-      // stts
-      reps.set(stts, wr(w.buildStts(98304, ss.length, sd)));
-      // stsz
-      var szb = new Uint8Array(ss.length*4);
-      for(var i=0;i<ss.length;i++){var v=be32(ss[i]);szb[i*4]=v[0];szb[i*4+1]=v[1];szb[i*4+2]=v[2];szb[i*4+3]=v[3]}
-      wb(szb); reps.set(stsz, wr(w.buildStsz(98304, 16384, ss.length)));
-      // stsc
-      var scb = new Uint8Array(sce.length*12);
-      for(var i=0;i<sce.length;i++){var e=sce[i];var v1=be32(e[0]);scb[i*12]=v1[0];scb[i*12+1]=v1[1];scb[i*12+2]=v1[2];scb[i*12+3]=v1[3];var v2=be32(e[1]);scb[i*12+4]=v2[0];scb[i*12+5]=v2[1];scb[i*12+6]=v2[2];scb[i*12+7]=v2[3];var v3=be32(e[2]);scb[i*12+8]=v3[0];scb[i*12+9]=v3[1];scb[i*12+10]=v3[2];scb[i*12+11]=v3[3]}
-      wb(scb); reps.set(stsc, wr(w.buildStsc(98304, 16384, sce.length, sco.length)));
-      // stco for each track
-      allStco.forEach(function(sc){
-        var offs = pStco(sc.o);
-        var ob = new Uint8Array(offs.length*4);
-        for(var i=0;i<offs.length;i++){var v=be32(offs[i]);ob[i*4]=v[0];ob[i*4+1]=v[1];ob[i*4+2]=v[2];ob[i*4+3]=v[3]}
-        wb(ob);
-        var hf = sc===stco?1:0;
-        var fakeOffVal = hf?fakeOff:0;
-        reps.set(sc, wr(w.buildStco(98304, 16384, offs.length, delta, hf)));
-        // Patch fake offsets in stco if this is video track
-        if (hf) {
-          var stcoBytes = reps.get(sc);
-          for (var i = offs.length; i < offs.length + fcVal; i++) {
-            var v = be32(fakeOff + i * 0); // all fake offsets point to same location
-            stcoBytes[16 + i*4] = v[0]; stcoBytes[16+i*4+1] = v[1]; stcoBytes[16+i*4+2] = v[2]; stcoBytes[16+i*4+3] = v[3];
-          }
-        }
-      });
+      var p = 131072;
+      function nb() { var s=r32(mem,p); var b=mem.slice(p,p+s); p+=s; return b; }
+      reps.set(mdhd, nb());
+      reps.set(elst, nb());
+      reps.set(stts, nb());
+      reps.set(stsz, nb());
+      reps.set(stsc, nb());
+      reps.set(stco, nb());
+      for (var j = 0; j < otherStcoBoxes.length && j < 4; j++) {
+        reps.set(otherStcoBoxes[j], nb());
+      }
       return reps;
     }
 
-    // Three-pass
     var r1 = buildReps(0, 0);
     var m1 = rb2(moov, r1);
     var oSize = 0; for(var i=0;i<other.length;i++)oSize+=other[i].length;
@@ -169,7 +194,7 @@
     var delta1 = s1 - mdat.cs;
 
     var mdatRaw = input.slice(mdat.cs, mdat.e);
-    var fakeRaw = new Uint8Array(w.mem.buffer).slice(fakeBytesPtr, fakeBytesPtr+8);
+    var fakeBytes = mem.slice(32768, 32776);
     var fakeOff1 = s1 + mdatRaw.length;
 
     var r2 = buildReps(delta1, fakeOff1);
@@ -182,17 +207,10 @@
     var m3 = rb2(moov, r3);
     var s3 = ftyp.s + m3.length + oSize + 8;
 
-    var newMdat = ca([mdatRaw, fakeRaw]);
+    var newMdat = ca([mdatRaw, fakeBytes]);
     var newMdatBox = mb("mdat", newMdat);
     var output = ca([bb(ftyp), m3].concat(other).concat([newMdatBox]));
 
-    return {
-      output: output,
-      realSamples: ss.length,
-      fakeSamples: fcVal,
-      fakeSampleSize: fsVal,
-      fakeOffset: s3 + mdatRaw.length,
-      stcoDelta: delta2
-    };
+    return { output: output };
   };
 })();
