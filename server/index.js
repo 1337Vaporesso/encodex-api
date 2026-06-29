@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
+const ryuPatcher = require('./ryu_patcher.js');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -715,27 +716,25 @@ app.get('/api/process/result', async (req, res) => {
   }
 });
 
-// ---- QUICK PROCESS (premium required, passthrough, patching done client-side) ----
+// ---- QUICK PROCESS (premium required, patching done server-side) ----
 app.post('/api/process/quick', auth, upload.single('video'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file' });
     const userResult = await pool.query('SELECT premium FROM users WHERE id = $1', [req.userId]);
     if (!userResult.rows[0] || !userResult.rows[0].premium)
       return res.status(403).json({ ok: false, error: 'Premium required' });
-    const stat = await fs.promises.stat(req.file.path);
+    const inputBuffer = fs.readFileSync(req.file.path);
+    const patched = ryuPatcher.patchFile(inputBuffer);
     res.writeHead(200, {
       'Content-Type': 'video/mp4',
       'Content-Disposition': 'attachment; filename="patched_video.mp4"',
-      'Content-Length': stat.size
+      'Content-Length': patched.length
     });
-    const stream = fs.createReadStream(req.file.path);
-    stream.pipe(res);
-    stream.on('end', () => {
-      fs.unlink(req.file.path, () => {});
-    });
+    res.end(patched);
+    try { fs.unlink(req.file.path, function(){}); } catch(ue) {}
   } catch (e) {
     console.error('[EncodeX] quick process error:', e.message);
-    if (req.file) fs.unlink(req.file.path, () => {});
+    if (req.file) try { fs.unlink(req.file.path, function(){}); } catch(ue) {}
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });

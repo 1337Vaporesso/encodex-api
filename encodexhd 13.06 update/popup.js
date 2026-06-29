@@ -551,39 +551,44 @@ if (openTabBtn) {
   });
 }
 patchBtn.addEventListener("click", async () => {
-  if (!selectedFile) {
-    return;
-  }
+  if (!selectedFile) return;
   setStatus("scanning", "processing");
   try {
-    const _0xdc3ec5 = await selectedFile.arrayBuffer();
-    const _0x1e1d39 = patchSharkSampleTableMethod(_0xdc3ec5);
-    const _0x2a0282 = {
-      realSamples: _0x1e1d39.realSamples,
-      fakeSamples: _0x1e1d39.fakeSamples
-    };
-    setStatus("patched", "processing", _0x2a0282);
-    const _0xa75f27 = {
-      type: selectedFile.type || "video/mp4"
-    };
-    const _0x372e5e = new Blob([_0x1e1d39.output], _0xa75f27);
-    const _0x219fe9 = URL.createObjectURL(_0x372e5e);
-    const _0x10e16e = document.createElement("a");
-    _0x10e16e.href = _0x219fe9;
-    const _0x100f1e = selectedFile.name.replace(/\.[^/.]+$/, "");
-    _0x10e16e.download = _0x100f1e + "_encodexhd_bypassed.mp4";
-    document.body.appendChild(_0x10e16e);
-    _0x10e16e.click();
-    _0x10e16e.remove();
-    setTimeout(() => URL.revokeObjectURL(_0x219fe9), 2000);
-    setStatus("downloaded", "success");
-    const _0x48cf45 = document.getElementById("tiktokUploadBtn");
-    if (_0x48cf45) {
-      _0x48cf45.style.display = "inline-flex";
+    const API = 'https://encodex-api-production.up.railway.app';
+    const token = await new Promise(function(resolve) {
+      chrome.storage.local.get("encodex_token", function(res) {
+        resolve(res.encodex_token || null);
+      });
+    });
+    if (!token) throw new Error("Not logged in. Open settings to login.");
+    const formData = new FormData();
+    formData.append("video", selectedFile);
+    const resp = await fetch(API + "/api/process/quick", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token },
+      body: formData
+    });
+    if (!resp.ok) {
+      let errMsg = "Server error: " + resp.status;
+      try { const errData = await resp.json(); errMsg = errData.error || errMsg; } catch(e) {}
+      throw new Error(errMsg);
     }
-  } catch (_0x2ebd4c) {
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const name = selectedFile.name.replace(/\.[^/.]+$/, "");
+    a.download = name + "_encodexhd_bypassed.mp4";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setStatus("downloaded", "success");
+    const tiktokBtn = document.getElementById("tiktokUploadBtn");
+    if (tiktokBtn) tiktokBtn.style.display = "inline-flex";
+  } catch (err) {
     setStatus("failed", "error", {
-      message: _0x2ebd4c && _0x2ebd4c.message ? _0x2ebd4c.message : "unknown error"
+      message: err && err.message ? err.message : "unknown error"
     });
   }
 });
