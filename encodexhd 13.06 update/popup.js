@@ -1,32 +1,5 @@
-/* ═══ WASM Patcher ═══ */
-var wasmPatcher = null;
+/* ═══ JS Patcher (RYU-style) ═══ */
 var selectedFile = null;
-
-async function initWasmPatcher() {
-  try {
-    var res = await fetch(chrome.runtime.getURL('patcher.wasm'));
-    var bytes = await res.arrayBuffer();
-    var inst = (await WebAssembly.instantiate(bytes, {})).instance;
-    var mem = inst.exports.memory;
-    var patchFn = inst.exports.patch;
-    wasmPatcher = {
-      patch: function(buf) {
-        var src = new Uint8Array(buf);
-        var len = src.byteLength;
-        var need = Math.ceil(len / 65536);
-        var cur = mem.buffer.byteLength / 65536;
-        if (need > cur) mem.grow(need - cur);
-        new Uint8Array(mem.buffer, 0, len).set(src);
-        patchFn(len);
-        return new Uint8Array(mem.buffer, 0, len).buffer;
-      }
-    };
-    return true;
-  } catch (e) {
-    console.error('[EncodeX] WASM:', e);
-    return false;
-  }
-}
 
 /* ═══ Elements ═══ */
 var fileInput = document.getElementById('fileInput');
@@ -85,7 +58,6 @@ function selectFile(file) {
 /* ═══ Patching ═══ */
 async function patchVideo() {
   if (!selectedFile) { setStatus('No file selected.', 'error'); return; }
-  if (!wasmPatcher) { setStatus('Patcher not ready.', 'error'); return; }
   setProgress(0);
   setStatus('Reading file...', 'processing');
   var buffer;
@@ -95,7 +67,7 @@ async function patchVideo() {
   setProgress(35);
   setStatus('Patching video...', 'processing');
   try {
-    var patched = wasmPatcher.patch(buffer);
+    var patched = patchFile(buffer);
     setProgress(70);
     var blob = new Blob([patched], { type: 'video/mp4' });
     var url = URL.createObjectURL(blob);
@@ -133,7 +105,4 @@ uploadTrigger.addEventListener('drop', function(e) {
 patchBtn.addEventListener('click', patchVideo);
 
 /* ═══ Boot ═══ */
-initWasmPatcher().then(function(ok) {
-  if (ok) setStatus('Ready — select a video.', 'idle');
-  else setStatus('Failed to load patcher.', 'error');
-});
+setStatus('Ready — select a video.', 'idle');
