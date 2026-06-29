@@ -20,7 +20,7 @@ const COPY = {
   en: {
     title: "Shark Uploader",
     subtitle: "Local MP4 patch + upload metadata bypass",
-    method: "1dleryu method",
+    method: "EncodeX HD method",
     selectVideo: "Select video",
     openTab: "Open in new tab",
     patchDownload: "Patch & Download",
@@ -41,7 +41,7 @@ const COPY = {
   pt: {
     title: "Shark Uploader",
     subtitle: "Patch local de MP4 + limpeza de metadados do bypass",
-    method: "1dleryu method",
+    method: "EncodeX HD method",
     selectVideo: "Selecionar video",
     openTab: "Abrir em nova aba",
     patchDownload: "Patch & Download",
@@ -571,7 +571,7 @@ patchBtn.addEventListener("click", async () => {
     const _0x10e16e = document.createElement("a");
     _0x10e16e.href = _0x219fe9;
     const _0x100f1e = selectedFile.name.replace(/\.[^/.]+$/, "");
-    _0x10e16e.download = _0x100f1e + "_1dleryu_bypassed.mp4";
+    _0x10e16e.download = _0x100f1e + "_encodexhd_bypassed.mp4";
     document.body.appendChild(_0x10e16e);
     _0x10e16e.click();
     _0x10e16e.remove();
@@ -646,7 +646,7 @@ function updateCmdPreview() {
   const _0x14a6f0 = ffmpegSelectedFile ? ffmpegSelectedFile.name.replace(/\.[^/.]+$/, "") : "input";
   const _0x5e3e03 = detectedFps ? +(detectedFps * _0x11a76d).toFixed(4) : "(src×" + _0x11a76d + ")";
   const _0x1ba58c = +(1 / _0x11a76d).toFixed(4);
-  cmdPreview.innerHTML = "ffmpeg -i <span style='color:#f0900a'>" + _0x14a6f0 + ".mp4</span> " + ("-vf \"fps=fps=<span style='color:#3b9eff'>" + _0x5e3e03 + "</span>,setpts=<span style='color:#3b9eff'>" + _0x1ba58c + "</span>*PTS\" ") + "-c:v libx264 -crf 18 -c:a copy " + ("<span style='color:#22d97a'>" + _0x14a6f0 + "_fps" + _0x11a76d + "x_1dleryu.mp4</span>");
+  cmdPreview.innerHTML = "ffmpeg -i <span style='color:#f0900a'>" + _0x14a6f0 + ".mp4</span> " + ("-vf \"fps=fps=<span style='color:#3b9eff'>" + _0x5e3e03 + "</span>,setpts=<span style='color:#3b9eff'>" + _0x1ba58c + "</span>*PTS\" ") + "-c:v libx264 -crf 18 -c:a copy " + ("<span style='color:#22d97a'>" + _0x14a6f0 + "_fps" + _0x11a76d + "x_encodexhd.mp4</span>");
 }
 function setFfmpegStatus(_0x4dddbb, _0xbd1205 = "idle") {
   ffmpegStatusEl.textContent = _0x4dddbb;
@@ -757,7 +757,7 @@ ffmpegPatchBtn.addEventListener("click", async () => {
     const _0x9da916 = document.createElement("a");
     _0x9da916.href = _0x44db25;
     const _0x2fb0c4 = ffmpegSelectedFile.name.replace(/\.[^/.]+$/, "");
-    _0x9da916.download = _0x2fb0c4 + "_fps" + selectedFpsRatio + "x_1dleryu.mp4";
+    _0x9da916.download = _0x2fb0c4 + "_fps" + selectedFpsRatio + "x_encodexhd.mp4";
     document.body.appendChild(_0x9da916);
     _0x9da916.click();
     _0x9da916.remove();
